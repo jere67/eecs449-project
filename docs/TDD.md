@@ -53,7 +53,7 @@ Dashed boxes are deterministic code and solid boxes are LLM agents; the Orchestr
 
 | Layer | Component | Type | Responsibility |
 | --- | --- | --- | --- |
-| Trigger | Scheduler | jac-scale scheduled walker (cron trigger) | Starts the daily run at 7:30 a.m. ET on trading days and the post-close review at 4:30 p.m. ET |
+| Trigger | Scheduler | Static `@schedule` job (`[scale.scheduler]`, UTC cron) | Starts the daily run at 7:30 a.m. ET on trading days and the post-close review at 4:30 p.m. ET, firing at both UTC offsets and proceeding only when New York time matches |
 | Control | Orchestrator Agent | LLM with tools (`by llm(tools=[...])`) | Plans the run, dispatches research, verifies reports, requests follow-ups, convenes the analysis panel, reviews decisions, writes the run summary |
 | Control | Run Guard | Deterministic walker | Enforces step and token budgets, checks that every shortlisted ticker ends with a decision, and falls back to a fixed plan if the Orchestrator fails |
 | Universe | Screener | Deterministic code | Narrows the S&P 500 to about 15 tickers plus all open positions (Section 5) |
@@ -66,8 +66,8 @@ Dashed boxes are deterministic code and solid boxes are LLM agents; the Orchestr
 | Action | Risk gate | Deterministic code | Rejects or resizes anything that breaks portfolio limits (Section 8) |
 | Action | Executor | Deterministic code | Places, monitors, and reconciles orders on Alpaca paper accounts |
 | Action | Insight publisher | Deterministic code | Posts decisions as plain-English insight cards for users |
-| Product | API and dashboard | Jac walkers as REST endpoints; `cl` React UI | Serves the dashboard, on-demand reports, and account connections (Sections 9–10) |
-| State | Graph store | Jac persistent graph (SQLite locally, MongoDB when deployed) | Holds runs, reports, votes, decisions, orders, and users (Section 11) |
+| Product | API and dashboard | `def:pub` functions and walkers as REST endpoints; jac-client React UI | Serves the dashboard, on-demand reports, and account connections (Sections 9–10) |
+| State | Graph store | Jac persistent graph on Postgres (embedded locally, provisioned when deployed) | Holds runs, reports, votes, decisions, orders, and users (Section 11) |
 
 ### Design principles
 
@@ -76,27 +76,32 @@ Dashed boxes are deterministic code and solid boxes are LLM agents; the Orchestr
 3. **Typed handoffs.** Every agent returns a Jac `obj` that byLLM validates, so a malformed output fails loudly instead of flowing downstream.
 4. **Everything is replayable.** Raw inputs, prompts, outputs, and model versions are stored per run, so any decision can be audited on the dashboard.
 5. **Asset-agnostic core.** Crypto and prediction markets plug in as new collectors, research sub-agents, and specialists; the Orchestrator, consensus engine, risk gate, and dashboard stay the same.
+6. **Every model call fails safe.** Each `by llm` call site catches provider errors and exhausted parse retries and records a deterministic default, such as HOLD for a ticker, so one bad response never stops a run.
+   A kill switch runs the whole pipeline with no model calls, which the fallback drill and CI use.
 
 ## 3. Tech stack and Jac implementation
 
-The whole backend, agent layer, and dashboard are written in Jac: agents are `by llm()` functions with typed returns, the pipeline is a walker that traverses a persistent graph, and jac-scale turns walkers into authenticated REST endpoints. Python libraries (pandas, alpaca-py, requests) are imported directly, since Jac compiles to Python bytecode.
+The whole backend, agent layer, and dashboard are written in Jac: agents are `by llm()` functions with typed returns, the pipeline is a walker that traverses a persistent graph, and the Jac server turns `def:pub` functions and walkers into authenticated REST endpoints.
+Python libraries (pandas, alpaca-py, requests) are imported directly, since Jac compiles to Python bytecode.
+The project pins Jac 0.37.12 (`jac-version = "==0.37.12"` in `jac.toml`).
+Jac replaced its storage engine and its serve command within the two minor releases before this one, so the team does not upgrade mid-semester, and the version-matched `jac guide` references bundled with the compiler outrank the website docs wherever they disagree.
 
 ### Stack
 
 | Concern | Choice | Why |
 | --- | --- | --- |
-| Language | Jac ([docs](https://docs.jaseci.org/llms.txt)) | Course requirement; graphs, walkers, LLM calls, APIs, and UI in one language |
-| LLM integration | byLLM ([reference](https://docs.jaseci.org/reference/plugins/byllm/)) over LiteLLM | Return types become enforced output schemas; one config value switches models |
+| Language | Jac 0.37.12 ([docs](https://docs.jaseci.org/llms.txt); bundled `jac guide` references) | Course requirement; graphs, walkers, LLM calls, APIs, and UI in one language |
+| LLM integration | byLLM ([reference](https://docs.jaseci.org/reference/plugins/byllm/)) over LiteLLM | Return types become enforced output schemas; `ModelPool` gives model fallback; one config value switches models |
 | Model provider | OpenRouter free model variants ([limits](https://openrouter.ai/docs/api-reference/limits)), reached through LiteLLM's OpenRouter support ([LiteLLM](https://docs.litellm.ai/docs/providers/openrouter)) | No per-token cost; Section 12 covers the model choice and request limits |
-| Server | jac-scale, `jac start` ([reference](https://docs.jaseci.org/reference/plugins/jac-scale/)) | Walkers become FastAPI endpoints with Swagger, JWT auth, and SQLite persistence |
-| Hosting | jac-scale, `jac start --scale` ([production guide](https://docs.jaseci.org/production/)) | Deploys to Kubernetes and provisions MongoDB and Redis automatically; deployment targets include AWS and GCP |
-| Frontend | jac-client, `cl { }` blocks ([full-stack guide](https://docs.jaseci.org/full-stack/)) | React-style JSX in the same codebase; components call walkers directly |
-| Scheduling | jac-scale's scheduler extra (APScheduler, `@schedule`) | Runs the morning and post-close walkers inside the app, with no external cron |
-| Concurrency | `flow` / `wait` for blocking I/O ([reference](https://docs.jaseci.org/reference/language/concurrency/)) | Collectors are network-bound, so threads give real speedup; model calls are limited by OpenRouter's request cap instead |
+| Server | Jac's built-in HTTP server, `jac run` (`jac run --dev` locally) | `def:pub` functions and walkers become `/function/<name>` and `/walker/<name>` endpoints with OpenAPI docs at `/docs`, JWT auth, and Postgres persistence |
+| Hosting | `jac scale deploy` ([production guide](https://docs.jaseci.org/production/)) | Deploys to an existing Kubernetes cluster through a kubeconfig and provisions Postgres and an NGINX ingress; it has no AWS- or GCP-specific provisioning, so the team picks the cluster in week 1 |
+| Frontend | jac-client components ([full-stack guide](https://docs.jaseci.org/full-stack/)) | React-style JSX in the same codebase; placement (client or server) is inferred and pinned with `[placement]` in `jac.toml`; components call `def:pub` functions with `await` |
+| Scheduling | Built-in scheduler (`[scale.scheduler]`, APScheduler, `@schedule`) | Runs the morning and post-close jobs inside the app as the system user, with no external cron; cron expressions are UTC and fire once per replica |
+| Concurrency | `flow` / `wait` for blocking I/O ([reference](https://docs.jaseci.org/reference/language/concurrency/)) | Collectors are network-bound, so threads give real speedup; `flow` shares one pool of min(32, CPUs + 4) threads; model calls are limited by OpenRouter's request cap instead |
 | Broker | Alpaca Trading API, paper environment, via alpaca-py | Free paper trading with real-time IEX data |
-| Storage | Jac graph: SQLite in development, MongoDB when deployed with `--scale` | Persistence is automatic for nodes attached to `root` |
-| Testing | `MockLLM`, Jac `test` blocks, recorded API fixtures | Deterministic CI that uses no model requests |
-| Observability | byLLM telemetry; jac-scale's `/admin/llm/telemetry` endpoints and Prometheus metrics | Per-agent latency, call counts, and error rates |
+| Storage | Jac graph on Postgres: embedded in development, a provisioned StatefulSet (or `JAC_DB_URL`) when deployed | Nodes persist automatically once reachable from `root` or `root.shared`; large payloads go to `store()` |
+| Testing | `MockLLM`, Jac `test` blocks, Hypothesis, recorded API fixtures | Deterministic CI that uses no model requests |
+| Observability | byLLM telemetry callback; admin-only `/admin/llm/telemetry/summary` and `/traces`; Prometheus metrics through `[scale.monitoring]` | Per-agent latency, call counts, and error rates |
 | Dev tooling | GitHub and the Flowline board; Claude Code | Course workflow; AI-assisted development |
 
 ### How the Jac concepts map to the design
@@ -104,74 +109,255 @@ The whole backend, agent layer, and dashboard are written in Jac: agents are `by
 | Jac concept | Used for |
 | --- | --- |
 | `node` | Persistent entities: `Run`, `Ticker`, `ResearchReport`, `Vote`, `Decision`, `Order`, `Portfolio`, `UserProfile` |
-| `edge` | Relationships, such as a `Run` to the tickers it covers and a `Decision` to its `Order` |
-| `obj` | Typed agent inputs and outputs, validated by byLLM |
-| `def ... by llm()` | Each agent role; `sem` strings carry the role instructions |
-| `by llm(tools=[...])` | The Orchestrator's ReAct loop over sub-agent tools, bounded by `max_react_iterations` and an `on_iteration` hook |
-| `walker` | The daily pipeline, the on-demand report flow, and every dashboard endpoint |
-| `walker:pub`, default, `walker:priv` | Public dashboard reads, authenticated user actions, and per-user isolated data |
-| `cl { }` | Dashboard components, which call walkers with `root spawn` |
-| `@schedule` (jac-scale) | The 7:30 a.m. run and the 4:30 p.m. post-close job |
+| `edge` | Typed relationships declared with endpoints, such as `edge Covers: Run --> Coverage {}` and a `Decision` to its `Order` |
+| `obj` | Typed agent inputs and outputs, validated by byLLM and copied into nodes for storage |
+| `enum X: str` | Values an agent returns, such as `Stance`; string values match what the model writes, while a plain enum serializes as integers and rejects `"BUY"` |
+| `def ... by <role_llm>()` | Each agent role, called through that role's own model instance; `sem` strings carry the role instructions |
+| `by <role_llm>(tools=[...])` | The Orchestrator's ReAct loop over sub-agent tools, bounded by `max_react_iterations` and an `on_iteration` hook that can return `ABORT_WITH_SUMMARY` |
+| `obj LimitedPool(ModelPool)` | One subclass that gates every provider request through the shared rate limiter and falls back to a second model |
+| `walker` | The daily pipeline and any endpoint that traverses the graph |
+| `def:pub` | Dashboard and report endpoints that only read or compute; preferred over walkers when no traversal is needed |
+| `:pub` vs. default visibility | `:pub` endpoints allow anonymous callers and read public data from `root.shared`; default endpoints (identical to `:priv`) require a JWT and run on the caller's own root |
+| `root.shared` and `grant()` | The public team graph, written by the scheduled job and opened read-only per node with `grant(node, level=AccessLevel.READ)` |
+| jac-client components | Dashboard pages, which call `def:pub` functions with `await` or spawn walkers and read `.reports` |
+| `@schedule` | The 7:30 a.m. run and the 4:30 p.m. post-close job, registered in UTC (Section 4) |
 
 ### Code sketch
 
-The sketch below shows the shape of the code, not final syntax; confirm details against the installed byLLM version.
+The sketch below shows the shape of the code.
+It passes `jac check` with every lint rule enabled and its tests pass on Jac 0.37.12; only the HTTP target and the screen are placeholders.
+This `jac.toml` is the single copy of the model configuration; Section 12 refers to it.
 
 ```toml
 # jac.toml
-[plugins.byllm.model]
-default_model = "openrouter/qwen/qwen3.8-27b:free"   # OPENROUTER_API_KEY set in the environment
+[project]
+name = "trading-agent"
+kind = "web-app"
+jac-version = "==0.37.12"
 
-[plugins.byllm.call_params]
+[byllm]
+[byllm.model]
+default_model = "openrouter/qwen/qwen3.8-27b:free"   # OPENROUTER_API_KEY exported in the environment
+
+[byllm.call_params]
 temperature = 0.2
+max_output_retries = 1        # each parse retry is another OpenRouter request
+
+[placement]
+default = "server"            # pin client modules explicitly under [placement.pins]
+
+[scale.scheduler]
+enabled = true
+
+[serve.auth]
+secret = "${JAC_SERVE_AUTH_SECRET}"
+
+[scale.admin]
+default_password = "${ADMIN_PASSWORD}"
 ```
 
 ```jac
-enum Stance { STRONG_SELL, SELL, HOLD, BUY, STRONG_BUY }
+# agents/models.jac: one model instance per role, every request rate limited
+import threading;
+import time;
+import from jaclang.byllm.lib { Model, ModelPool }
+
+glob PRIMARY: str = "openrouter/qwen/qwen3.8-27b:free";
+glob FALLBACK: str = "openrouter/openrouter/free";   # the Free Models Router
+glob RPM_LIMIT: int = 18;
+
+glob _slot_lock: threading.Lock = threading.Lock();
+glob _last_slot: list[float] = [0.0];
+
+"""Block until the shared 18-per-minute budget allows one more request."""
+def request_slot {
+    with _slot_lock {
+        wait_s = _last_slot[0] + 60.0 / RPM_LIMIT - time.monotonic();
+        if wait_s > 0 { time.sleep(wait_s); }
+        _last_slot[0] = time.monotonic();
+    }
+}
+
+"""Every provider request, including parse retries and ReAct iterations, passes the limiter."""
+obj LimitedPool(ModelPool) {
+    override def model_call_no_stream(params: dict[str, object]) -> dict[str, object] {
+        request_slot();
+        return super.model_call_no_stream(params);
+    }
+}
+
+def role_model -> LimitedPool {
+    return LimitedPool(
+        models=[Model(model_name=PRIMARY), Model(model_name=FALLBACK)],
+        strategy="fallback",
+        num_retries=1
+    );
+}
+
+# `by m(temperature=...)` overwrites m's call params, so roles that share an
+# instance leak settings into each other's concurrent calls.
+glob research_llm: LimitedPool = role_model();
+glob specialist_llm: LimitedPool = role_model();
+glob arbiter_llm: LimitedPool = role_model();
+glob orchestrator_llm: LimitedPool = role_model();
+```
+
+```jac
+# models/agents.jac: typed handoffs, with no server-only imports
+enum Stance: str {
+    STRONG_SELL = "STRONG_SELL",
+    SELL = "SELL",
+    HOLD = "HOLD",
+    BUY = "BUY",
+    STRONG_BUY = "STRONG_BUY"
+}
+
+glob STANCE_SCORE: dict[Stance, int] = {
+    Stance.STRONG_SELL: -2, Stance.SELL: -1, Stance.HOLD: 0, Stance.BUY: 1, Stance.STRONG_BUY: 2
+};
 
 obj Evidence { has claim: str, source_url: str, published: str; }
 
 obj ResearchReport {
     has domain: str, ticker: str, as_of: str;
     has summary: str, view: Stance, confidence: float;
-    has evidence: list[Evidence], risks: list[str], data_gaps: list[str];
+    has evidence: list[Evidence] = [], risks: list[str] = [], data_gaps: list[str] = [];
 }
 
 obj Vote {
     has specialist: str, stance: Stance, confidence: float;
-    has horizon_days: int, rationale: str, cited_evidence: list[int];
+    has horizon_days: int, rationale: str;
+    has cited_evidence: list[int] = [];
+
+    # Raising here counts as a parse failure, so byLLM retries with feedback.
+    def postinit {
+        if self.confidence < 0.0 or self.confidence > 1.0 {
+            raise ValueError(f"confidence out of range: {self.confidence}");
+        }
+    }
+}
+sem Vote.confidence = "Probability in [0, 1] that the stance is right over horizon_days.";
+sem Vote.cited_evidence = "Indices of the evidence items this vote relies on; never empty.";
+```
+
+```jac
+# agents/specialists.jac
+import from agents.models { specialist_llm }
+import from models.agents { ResearchReport, Vote }
+
+def fundamentals_specialist(ticker: str, reports: list[ResearchReport]) -> Vote
+    by specialist_llm(temperature=0.8);
+sem fundamentals_specialist = "You are a buy-side fundamentals analyst. Judge only valuation, growth, margins, balance sheet, and guidance. Cite evidence by index.";
+sem fundamentals_specialist.reports = "Typed research reports; evidence is indexed in order.";
+```
+
+```jac
+# research/collectors.jac
+import requests;
+import from concurrent.futures { Future }
+
+obj RawBundle {
+    has ticker: str;
+    has payload: dict[str, str] = {};
+    has error: str = "";
 }
 
-sem fundamentals_specialist = "You are a buy-side fundamentals analyst. Judge only valuation, growth, margins, balance sheet, and guidance. Cite evidence by index.";
-def fundamentals_specialist(ticker: str, reports: list[ResearchReport]) -> Vote by llm(temperature=0.8);
+"""Blocking HTTP only: flow workers do not see the request's root, so no graph access here."""
+def collect_data(ticker: str) -> RawBundle {
+    try {
+        resp = requests.get(f"https://example.invalid/{ticker}", timeout=10);
+        return RawBundle(ticker=ticker, payload={"status": str(resp.status_code)});
+    } except requests.RequestException as e {
+        return RawBundle(ticker=ticker, error=str(e));
+    }
+}
+
+"""The parameter pins `ticker` per task; `[flow f(t) for t in xs]` races the loop variable."""
+def start_collect(ticker: str) -> Future[RawBundle] {
+    return (flow collect_data(ticker)) as Future[RawBundle];
+}
+
+def collect_all(tickers: list[str]) -> list[RawBundle] {
+    futures = [start_collect(t) for t in tickers];
+    return [(wait f) as RawBundle for f in futures];
+}
+```
+
+```jac
+# run/pipeline.jac
+import from research.collectors { RawBundle, collect_all }
+
+node Run {
+    has run_date: str;
+    has status: str = "running";
+}
+node Coverage {
+    has ticker: str;
+    has fetch_error: str = "";
+}
+edge Covers: Run --> Coverage {}
 
 walker DailyRun {
-    has run_date: str;
+    has run_date: str = "";
+
     can start with Root entry {
-        shortlist = screen_universe(self.run_date);          # deterministic, no model requests
-        tasks = [flow collect_data(t) for t in shortlist];    # parallel HTTP collectors
-        raw = [wait t for t in tasks];
+        shortlist = screen_universe(self.run_date);         # deterministic, no model requests
+        raw: list[RawBundle] = collect_all(shortlist);      # parallel blocking HTTP
+        run = here ++> Run(run_date=self.run_date);         # graph writes after wait, on this thread
+        for b in raw {
+            run +>:Covers():+> Coverage(ticker=b.ticker, fetch_error=b.error);
+        }
+        run.status = "collected";
         # research sub-agents, Orchestrator verification, panel, consensus, Arbiter,
-        # risk gate, executor; every model request passes one shared rate limiter
+        # risk gate, executor; every model request passes the shared limiter
+        report run;
     }
 }
 ```
+
+### Jac implementation rules
+
+These rules come from spikes run on Jac 0.37.12 and from the team's earlier Jac project; each one prevents a failure that compiles cleanly and only shows up at run time.
+
+1. **One model instance per role.** `by m(temperature=0.8)` writes its arguments into `m`'s shared settings, so concurrent calls through one instance send each other's temperatures; in a spike, 44 of 80 concurrent calls went out with the wrong value, and a nested sub-agent leaked its temperature into the Orchestrator.
+   Research, specialists, Arbiter, Orchestrator, and the low-temperature retry path each get their own instance.
+2. **Rate limiting and 429 handling are ours.** byLLM has no limiter and raises `RateLimitError` on a 429 without retrying or reading `Retry-After`.
+   The `LimitedPool` subclass gates every provider request, and the call-site wrapper backs off on 429s.
+3. **Budget for retries.** A failed parse is retried up to `max_output_retries` times with corrective feedback, and every retry is a request.
+   The project sets it to 1; after that, the call site catches `OutputConversionError` (imported from `jaclang.byllm.lib`) and falls back as in Section 4.
+4. **String enums for model outputs.** A plain `enum` serializes as integers, so the model's `"BUY"` fails validation; `enum Stance: str` with a score map in code avoids that.
+   Ranges such as confidence in [0, 1] are not part of the schema, so they go in `sem` text and in a `postinit` check, which byLLM treats as a parse failure and retries.
+5. **Launch `flow` through a helper.** The call inside `flow` runs on the worker thread, so a loop or comprehension variable can change before it is read; a helper whose parameter holds the value fixes it.
+6. **No graph access inside `flow`.** Worker threads do not inherit the request context and see the super root, so collectors return values and every graph write happens on the walker's thread after `wait`.
+7. **Every endpoint is imported by `main.jac`.** A `def:pub` function that the serving entry module does not import is not exposed for POST and returns 405, which hit the team's previous project; a smoke test POSTs every endpoint.
+8. **Pin placement.** Code reachable from the client cannot use Python imports, so `[placement] default = "server"` keeps agents, collectors, pandas, and alpaca-py on the server, and only dashboard modules are pinned to the client.
+   Types returned to the dashboard live in `models/` with no server-only imports, and endpoints never return DataFrames.
+9. **Public data lives on `root.shared`.** A signed-in user calling a `:pub` endpoint runs on their own root, so public reads name `root.shared` explicitly, and the scheduled job grants READ on every public node it creates; a grant covers one node, not its subtree.
+10. **`jac run` does not read `.env`.** Developers export variables (for example with direnv), and deployments use `[scale.secrets]`.
+11. **No date math in prompts.** Trading days, horizons, and time stops are computed in code and passed to agents as labels; timestamps are stored in UTC and converted to New York time only for market-hours logic.
+12. **Cap what agents read.** Tool results and prompts are length-capped and pass compact summaries, never raw bars or filings.
+13. **Long work runs outside requests.** The daily run is a scheduled job, and on-demand reports are queued and polled (Section 4), so no HTTP request holds a server worker for minutes.
 
 ### Repository layout
 
 ```
 trading-agent/
-  jac.toml                 # byLLM models, jac-scale config
-  main.jac                 # entry: walkers exposed as endpoints
-  agents/                  # orchestrator, research sub-agents, specialists, arbiter
-  collectors/              # one module per data source, with caching and rate limits
-  analysis/                # consensus engine, indicators, screener
-  action/                  # portfolio constructor, risk gate, executor, mirror
-  models/                  # node, edge, and obj definitions
-  ui/                      # cl dashboard pages and components
-  tests/                   # MockLLM tests, recorded API fixtures, backtest harness
-  .github/workflows/       # CI only; scheduling runs inside jac-scale
+  jac.toml                 # pinned Jac version, byLLM, placement, scheduler, scale config
+  main.jac                 # server entry: imports every endpoint
+  models/                  # node, edge, obj, and enum definitions; no server-only imports
+  agents/                  # role model instances, orchestrator, research sub-agents, specialists, arbiter
+  research/                # collectors (one module per source, with caching and rate limits), screener
+  analysis/                # consensus engine, indicators
+  action/                  # portfolio constructor, risk gate, executor
+  run/                     # DailyRun walker, Run Guard, scheduled jobs
+  dashboard/               # client pages and components, beside the def:pub endpoints they call
+  tests/                   # integration tests, recorded API fixtures, backtest harness
+  .github/workflows/       # CI only; scheduling runs inside the app
 ```
+
+Unit tests sit next to their modules as `module.test.jac` or `module_tests.jac`; files named `test_*.jac` are not allowed.
+Imports are absolute from the project root (`import from analysis.consensus { ... }`), since relative `..` imports break `jac test`.
+Moving a module that declares node types orphans their persisted data, so the layout is frozen in the Foundations phase, before the forward test stores anything.
 
 ## 4. Orchestration and daily pipeline
 
@@ -182,6 +368,8 @@ Each trading day runs one pipeline from 7:30 a.m. to 10:00 a.m. ET, plus a post-
 The Orchestrator talks only to the agent layers; Alpaca sees nothing until the risk gate has approved an order.
 
 ### Daily schedule (Eastern Time)
+
+The scheduler evaluates cron expressions in UTC, so each job is registered at both its EDT and EST offsets (for example `cron="30 11,12 * * 0-4"`, where day 0 is Monday) and proceeds only if New York time matches; the run-date idempotency key stops a second firing, including the one-per-replica firing on a multi-replica deploy.
 
 | Time | Phase | Owner | Output |
 | --- | --- | --- | --- |
@@ -200,24 +388,30 @@ The Orchestrator talks only to the agent layers; Alpaca sees nothing until the r
 
 ### Orchestrator tools
 
-The Orchestrator is a `by llm(tools=[...])` function running on the same free model as every other agent. It can only act through these tools:
+The Orchestrator is a `by orchestrator_llm(tools=[...])` function running on the same free model as every other agent, through its own model instance (Section 3).
+It can only act through these tools.
+Tools take ticker lists, so a 20-ticker run fits inside the iteration cap: covering each ticker one tool call at a time would need more than 40 iterations.
 
 | Tool | What it does | Limits |
 | --- | --- | --- |
 | `get_run_context()` | Returns the shortlist, portfolio, macro brief, and budget remaining | Read only |
-| `dispatch_research(ticker, domains)` | Runs the named research sub-agents for a ticker in parallel | Once per ticker per domain |
+| `dispatch_research(tickers, domains)` | Runs the named research sub-agents for a batch of tickers in parallel | Once per ticker per domain |
 | `request_followup(ticker, domain, question)` | Re-runs one sub-agent with a targeted question, such as resolving a conflict between news and filings | Two per ticker |
 | `flag_ticker(ticker, reason)` | Marks a ticker as unreliable today; forces HOLD | Logged and shown on the dashboard |
-| `convene_panel(ticker)` | Runs the specialist panel, consensus engine, and Arbiter | Once per ticker; requires verified reports |
+| `convene_panel(tickers)` | Runs the specialist panel, consensus engine, and Arbiter for a batch of tickers | Once per ticker; requires verified reports |
 | `submit_decisions(decisions)` | Sends the decision set to the Action layer | Once per run; passes through the risk gate |
 | `write_run_summary(text)` | Stores the day's plain-English summary | Once per run |
 
 ### Run Guard invariants
 
-- **Request budget.** One shared limiter caps every model call in the app at 18 per minute, under OpenRouter's free-model limit of 20. The Orchestrator's ReAct loop also has a hard iteration cap and an `on_iteration` hook that aborts with a summary when the run's request budget is spent.
+- **Request budget.** One shared limiter caps every model request in the app at 18 per minute, under OpenRouter's free-model limit of 20.
+  byLLM has no built-in limiter, so the limiter lives in the `LimitedPool` model class (Section 3) and also counts parse retries and ReAct iterations.
+  The Orchestrator's ReAct loop has a hard iteration cap (`max_react_iterations`) and an `on_iteration` hook that returns `ABORT_WITH_SUMMARY` when the run's request budget is spent; the hook runs between iterations, so a tool that is already running finishes first.
 - **Coverage.** Every shortlisted ticker and every open position ends the run with a `Decision`; a ticker lacking market, fundamentals, and news reports defaults to HOLD with reason "insufficient data."
-- **Fallback.** If the Orchestrator errors, times out, or aborts, the Run Guard executes the same phases in fixed order with no follow-ups. The dashboard marks the run as "fallback."
-- **Idempotency.** The run ID is the trading date, and every order's `client_order_id` is derived from run ID and ticker, so a scheduled job that fires twice cannot double-trade.
+- **Fallback.** If the Orchestrator errors, times out, or aborts, the Run Guard executes the same phases in fixed order with no follow-ups.
+  The dashboard marks the run as "fallback."
+- **Idempotency.** The run ID is the trading date, and the job claims its `Run` node before doing any work, so a second firing of the scheduler exits at once.
+  Every order's `client_order_id` is derived from run ID and ticker, so a job that fires twice cannot double-trade.
 - **Staleness.** Collectors stamp every datum with its fetch time; data older than its freshness limit is excluded and listed in the report's `data_gaps`.
 
 ### Failure handling
@@ -225,17 +419,21 @@ The Orchestrator is a `by llm(tools=[...])` function running on the same free mo
 | Failure | Behavior |
 | --- | --- |
 | A free data API is down or rate-limited | Retry with backoff; then use cached data inside its freshness limit; else record a data gap |
-| An agent's output fails type validation | Retry once at lower temperature; then drop that sample and count it against the reliability metric |
+| An agent's output fails type validation | byLLM retries the parse once with corrective feedback (`max_output_retries = 1`); if that fails, the call site catches `OutputConversionError` and calls the same role once at temperature 0.2 through a separate model instance; then it drops that sample and counts it against the reliability metric |
+| A model call raises any other error | Caught at the call site; the sample is dropped, or the ticker defaults to HOLD, with the error recorded |
 | Fewer than 60% of specialist samples succeed for a ticker | Force HOLD for that ticker |
-| OpenRouter returns 429 (rate limited) | Exponential backoff, honoring the `Retry-After` header when present |
-| The free model is unavailable or leaves the free list | Switch to the configured fallback, OpenRouter's Free Models Router, and alert the team |
+| OpenRouter returns 429 (rate limited) | byLLM raises `RateLimitError` without retrying, so the call-site wrapper backs off exponentially, honoring the `Retry-After` header when present |
+| The free model is unavailable or leaves the free list | Each `LimitedPool` falls back to OpenRouter's Free Models Router (`openrouter/openrouter/free`); the app alerts the team |
 | The daily free-model cap is nearly used up | Run in reduced mode (K = 1, shortlist of 10); existing stop orders stay in force |
 | Alpaca rejects an order | Log the rejection, surface it on the dashboard, and do not retry automatically |
 | Market holiday or early close | Preflight checks Alpaca's market calendar and skips the run or shifts the execution window |
 
 ### On-demand report flow
 
-When a user requests a report on any S&P 500 ticker, the same Orchestrator runs in report mode: it has no `submit_decisions` tool, and its output is an insight card rather than an order. Reports are cached per ticker per trading day and shared across users, and tickers already on the day's shortlist reuse the morning's research without new model requests. Each user can request three new reports per day (proposed).
+When a user requests a report on any S&P 500 ticker, the same Orchestrator runs in report mode: it has no `submit_decisions` tool, and its output is an insight card rather than an order.
+Reports are cached per ticker per trading day and shared across users, and tickers already on the day's shortlist reuse the morning's research without new model requests.
+Each user can request three new reports per day (proposed).
+A report takes minutes, so it never runs inside the HTTP request: the endpoint records a `ReportRequest` and returns a pending status, a scheduled interval job processes the queue in order, and the Reports page polls until the card is ready.
 
 ## 5. Universe selection: S&P 500 screen
 
@@ -244,6 +442,7 @@ A deterministic screen, with no LLM calls, narrows about 500 constituents to a s
 ### Steps
 
 1. **Load constituents.** Refresh the S&P 500 list weekly from the public Wikipedia "List of S&P 500 companies" table; store GICS sector and sub-industry.
+   The same page's table of past changes rebuilds point-in-time membership, which the historical harness uses instead of today's list to avoid survivorship bias.
 2. **Check tradability.** Keep symbols that Alpaca's `/v2/assets` endpoint marks active and tradable.
 3. **Pull daily bars.** Fetch one year of daily bars for all constituents through Alpaca's multi-symbol bars endpoint (a few dozen requests, well inside the free plan's 200 requests per minute).
 4. **Filter for liquidity.** Drop names below $50 million of 20-day average dollar volume (proposed).
@@ -306,9 +505,10 @@ Social sources (Reddit, StockTwits, Bluesky, Wikipedia pageviews, Google Trends)
 
 - [ ] Create team Alpaca paper accounts and API keys
 - [ ] Create the OpenRouter account and buy $10 of credits once, which raises the free-model cap from 50 to 1,000 requests a day
+- [ ] Check the OpenRouter account's privacy settings allow the chosen free models, since some free endpoints refuse requests unless prompt logging is permitted
 - [ ] Register free Finnhub and FRED API keys
 - [ ] Set the SEC User-Agent with a team contact email
-- [ ] Store every key in environment variables and jac-scale secrets, never in the repo
+- [ ] Store every key in exported environment variables locally (`jac run` does not read `.env`) and in `[scale.secrets]` when deployed, never in the repo
 
 ## 7. Analysis Agent: stochastic consensus
 
@@ -339,7 +539,9 @@ K starts at 3. If the result sits near a decision threshold, the engine draws 2 
 
 ### Vote format
 
-Each sample returns a typed `Vote`: a stance from STRONG\_SELL (−2) to STRONG\_BUY (+2), a confidence from 0 to 1, a horizon in trading days, a rationale, and the indices of the evidence it relied on. A vote that cites no evidence is discarded.
+Each sample returns a typed `Vote`: a stance from STRONG\_SELL to STRONG\_BUY, a confidence from 0 to 1, a horizon in trading days, a rationale, and the indices of the evidence it relied on.
+The stance is a string enum that code maps to a score from −2 to +2 (Section 3).
+A vote that cites no evidence is discarded.
 
 ### Aggregation
 
@@ -355,7 +557,11 @@ $$
 C = \frac{\sum_s w_s\, m_s}{\sum_s w_s}, \qquad A = \frac{\sum_{s,k} w_s\, \mathbb{1}[\operatorname{sign}(x_{s,k}) = \operatorname{sign}(C)]}{K \sum_s w_s}
 $$
 
-Weights are equal in the core build. A 1,000-draw bootstrap over the samples gives a 90% interval for C. Weights based on each specialist's track record are a stretch goal.
+A HOLD vote (x = 0) points neither way, so it counts as not agreeing with C.
+Weights are equal in the core build.
+A 1,000-draw bootstrap gives a 90% interval for C by resampling whole specialists, each with all of its samples, rather than individual samples.
+A specialist's K samples share one prompt and one evidence set, so resampling them as if independent would make the interval too narrow.
+Weights based on each specialist's track record are a stretch goal.
 
 ### Decision rule
 
@@ -363,8 +569,8 @@ Weights are equal in the core build. A 1,000-draw bootstrap over the samples giv
 | --- | --- |
 | C ≥ 0.35, A ≥ 0.6, and the 90% interval excludes zero | BUY (or ADD if held) |
 | Ticker held and C ≤ −0.25, or its exit condition triggered | SELL (exit) |
-| Ticker held and 0 < C < 0.35 | HOLD, with a possible trim if agreement falls below 0.5 |
-| Anything else | NO ACTION |
+| Ticker held and −0.25 < C < 0.35 | HOLD, with a possible trim if agreement falls below 0.5 |
+| Anything else | NO ACTION (a held position stays unchanged) |
 
 Conviction is |C| × A. The Action layer turns conviction into position size (Section 8).
 
@@ -392,7 +598,10 @@ $$
 w_i = \min\!\left(w_{\max},\; \lambda \cdot \frac{|C_i| \cdot A_i}{\sigma_i / \bar{\sigma}}\right)
 $$
 
-Here σ is the stock's 20-day realized volatility, σ̄ is the shortlist's median, λ is a scaling constant (starting at 0.08), and w\_max is the per-position cap. Weights are then scaled down together if the total would exceed the gross exposure limit. The MVP is long only: SELL means exit or trim, never short.
+Here σ is the stock's 20-day realized volatility, σ̄ is the shortlist's median, λ is a scaling constant (starting at 0.08), and w\_max is the per-position cap.
+Weights are then scaled down together if the total would exceed the gross exposure limit.
+Quantities are rounded down to whole shares, because each entry carries a GTC stop and Alpaca is expected to accept fractional orders only as DAY orders (confirmed in the order-rule spike below).
+The MVP is long only: SELL means exit or trim, never short.
 
 ### Risk gate
 
@@ -417,8 +626,12 @@ The gate records every approval, resize, and rejection with the rule that trigge
 - **Environment.** Paper trading only (`paper-api.alpaca.markets`); live endpoints are disabled in configuration and rejected in code.
 - **Order type.** Marketable limit orders at the last trade price ±0.3%, time in force DAY, submitted in the 9:45 a.m. window; unfilled orders are canceled at 3:50 p.m. and re-evaluated the next morning.
 - **Idempotency.** `client_order_id` = run date + ticker + action, so retries never duplicate orders.
-- **Reconciliation.** A trade-updates WebSocket listener records fills in real time; the 4:30 p.m. job reconciles positions against Alpaca's `/v2/positions` and flags any drift.
+- **Reconciliation.** A scheduled interval job polls order status from 9:45 to 10:00 a.m. and again at 3:50 p.m. to record fills; the 4:30 p.m. job reconciles positions against Alpaca's `/v2/positions` and flags any drift.
+  Jac has no supported hook for running a long-lived WebSocket client inside the server, so the design polls instead of listening for trade updates.
 - **Exits.** Price stops live at Alpaca as GTC orders; time stops and thesis invalidations are checked each morning and become SELL decisions.
+  An open stop order holds its shares, so before an exit or trim the executor cancels the stop, submits the sell, and re-places a stop for any shares that remain.
+- **Order-rule spike.** Before the Action phase, a week-1 spike on the paper account confirms how Alpaca treats the cases above: fractional shares with GTC stops, selling shares held by a stop, and adding to a position while its stop sell is open, which Alpaca may reject as a potential wash trade.
+  If adds are rejected, the executor uses Alpaca's one-triggers-other orders or cancels and re-places the stop around the add.
 
 ### Insight mode
 
@@ -439,7 +652,7 @@ Users reach the agent through two core surfaces: anyone can watch the team portf
 | Surface | Who | Login | What they get | Milestone |
 | --- | --- | --- | --- | --- |
 | Public team portfolio | Anyone | None | Live positions, performance against SPY, daily decisions with full reasoning, specialist statistics | MVP (Pitch Week) |
-| On-demand insight reports | Signed-in users | Email or Google SSO (jac-scale) | A full analysis of any S&P 500 ticker, cached per day; three new reports per user per day (proposed) | Launch Week |
+| On-demand insight reports | Signed-in users | Email and password, or Google SSO (`[scale.sso.google]`) | A full analysis of any S&P 500 ticker, cached per day; three new reports per user per day (proposed) | Launch Week |
 | Connected paper account | Signed-in users who opt in | Plus Alpaca OAuth | The team portfolio mirrored into their own paper account | Stretch goal |
 
 ### Connecting an Alpaca paper account (stretch goal)
@@ -448,7 +661,7 @@ Users reach the agent through two core surfaces: anyone can watch the team portf
 2. The app redirects to Alpaca's authorize URL with `env=paper` and `scope=trading`, plus a random `state` value.
 3. The user approves the paper account on Alpaca's consent screen.
 4. Alpaca redirects back with a one-time code; the backend verifies `state` and exchanges the code for an access token server-side.
-5. The token is encrypted at rest on the user's private (`:priv`) graph and never sent to the browser.
+5. The token is encrypted at rest on the user's own root, which only that user's authenticated endpoints can reach, and is never sent to the browser.
 6. The user chooses Mirror or Insight only, and can disconnect at any time, which deletes the token.
 
 Alpaca's OAuth grant can cover a live account, a paper account, or both ([Alpaca OAuth docs](https://docs.alpaca.markets/us/docs/using-oauth2-and-trading-api)). The app always requests `env=paper`, and the executor refuses any token whose account is not a paper account.
@@ -463,18 +676,20 @@ Every page states that the product is an educational student project using simul
 
 ## 10. Dashboard
 
-The dashboard is a jac-client (`cl`) React-style app served by the same `jac start` process, with six pages built around one idea: every number links down to the evidence behind it. It is built last, but a read-only Portfolio page and Decision page must exist for Pitch Week.
+The dashboard is a jac-client React-style app served by the same `jac run` process, with six pages built around one idea: every number links down to the evidence behind it.
+It is built last, but a read-only Portfolio page and Decision page must exist for Pitch Week.
+The backing endpoints are `def:pub` functions that read `root.shared` explicitly (Section 11), and `main.jac` imports every one of them (Section 3).
 
-| Page | Access | Shows | Backing walkers |
+| Page | Access | Shows | Backing endpoints |
 | --- | --- | --- | --- |
 | Portfolio | Public | Equity curve against SPY, Sharpe, max drawdown, open positions with entry, P&L, stop, and thesis | `get_portfolio`, `get_performance` |
 | Today | Public | The run's shortlist, each ticker's action and conviction, run status (normal or fallback), run summary | `get_run` |
 | Decision detail | Public | The full trail for one ticker: research reports and sources → every specialist sample → consensus score, agreement, interval → Arbiter → risk gate → order and fill | `get_decision_trail` |
 | Specialists | Public | Hit rate, calibration curve, and recent votes per specialist | `get_specialist_stats` |
 | Reports | Signed in | Request a ticker report, view past reports, remaining daily quota | `request_report`, `list_reports` |
-| Admin | Team only | Run logs, collector health, model calls and latency per agent, request-cap headroom | jac-scale admin and telemetry endpoints |
+| Admin | Team only | Run logs, collector health, model calls and latency per agent, request-cap headroom | Admin-only `/admin/llm/telemetry/*` and `/admin/logs` endpoints |
 
-A Live committee page (real-time run progress through a WebSocket walker) and an Account page for connected Alpaca accounts are stretch goals.
+A Live committee page (real-time run progress through polling or a streaming endpoint) and an Account page for connected Alpaca accounts are stretch goals.
 
 ### Design notes
 
@@ -482,15 +697,19 @@ A Live committee page (real-time run progress through a WebSocket walker) and an
 - **Disagreement is visible.** Vote distributions are shown as dot plots per specialist, so users see dissent rather than a single number.
 - **Mobile-first reading.** Portfolio, Today, and Decision detail must work on a phone, since most classmates will open the link from a shared message.
 - **No raw data redistribution.** Pages show derived analysis, short quotes of our own agents' text, and links to original sources.
+- **Pages never trigger model calls.** Public pages read state the pipeline already stored, so they load instantly and cannot spend the request budget.
 
 ## 11. Data model and storage
 
-All decision records live in Jac's persistent graph: a public system graph holds the team portfolio and every run, and each user's private root holds their reports and Alpaca connection. Raw API responses live outside the graph in a file cache, referenced by key.
+All decision records live in Jac's persistent graph.
+The public graph hangs off `root.shared`: the scheduled job runs as the system user, writes the team portfolio and every run there, and grants READ on each node it creates, so anonymous and signed-in visitors can read it.
+Each user's own root holds their reports and Alpaca connection.
+Raw API responses live outside the graph in `store()`, referenced by key, because each node is stored as one Postgres row that is rewritten on every update.
 
 ### Graph layout
 
 ```
-system root (public read via perm_grant)
+root.shared (written by the scheduled job; READ granted on each node)
   └─ Portfolio(team)
        ├─ Position* ──[opened_by]──> Decision
        └─ Run(date)*
@@ -501,10 +720,18 @@ system root (public read via perm_grant)
                  ├─ ConsensusResult
                  ├─ Decision ──[checked_by]──> RiskCheck ──[placed]──> Order ──[filled_by]──> Fill
                  └─ InsightCard
-user root (private, walker:priv)
+user root (the caller's own root; JWT required)
   ├─ UserProfile
   └─ ReportRequest* ──[uses]──> Coverage (shared daily cache)
 ```
+
+A grant covers one node, not its subtree, so public nodes are created through one helper that attaches the node and calls `grant(node, level=AccessLevel.READ)`.
+Frequent filters, such as votes by specialist, are written as inline graph queries so they compile to SQL and are backed by `[scale.database] indexes`.
+
+### Schema changes
+
+Adding a field with a default loads existing rows unchanged, removed fields move to an attic table, and renames need `schema_alias`.
+Moving a module that declares node types orphans their stored data, so module paths are frozen before the forward test (Section 3).
 
 ### Node types
 
@@ -525,36 +752,38 @@ user root (private, walker:priv)
 
 | Environment | Graph | Cache and files |
 | --- | --- | --- |
-| Local development (`jac start`) | SQLite (jac-scale default) | Local `store()` directory |
-| Deployed (`jac start --scale`) | MongoDB, provisioned automatically in the cluster | Redis, provisioned automatically; `store()` for payload files |
+| Local development (`jac run`) | Embedded Postgres, started automatically | `store()` on local disk |
+| Deployed (`jac scale deploy`) | Postgres StatefulSet provisioned in the cluster, or an external database through `JAC_DB_URL` | `store()` on S3 through `[scale.storage]`, since pod disk is not durable |
+
+`jac scale destroy` deletes the database volume, so the deployed database is backed up before any teardown.
 
 ## 12. LLM configuration and request budget
 
-Every agent runs on one free model, Qwen3.8 27B (`qwen/qwen3.8-27b:free`), which byLLM reaches through OpenRouter, so the system pays nothing per token. The binding constraint is OpenRouter's free-model rate limit, which covers the whole account: 20 requests per minute, and 1,000 requests per day once the account has bought at least $10 of credits, or 50 per day otherwise ([OpenRouter limits](https://openrouter.ai/docs/api-reference/limits)). A standard run uses about 440 requests, which leaves room for on-demand reports and retries.
+Every agent runs on one free model, Qwen3.8 27B (`qwen/qwen3.8-27b:free`), which byLLM reaches through OpenRouter, so the system pays nothing per token.
+The binding constraint is OpenRouter's free-model rate limit, which covers the whole account: 20 requests per minute, and 1,000 requests per day once the account has bought at least $10 of credits, or 50 per day otherwise ([OpenRouter limits](https://openrouter.ai/docs/api-reference/limits)).
+A standard run uses about 460 requests, including parse retries, which leaves room for on-demand reports.
 
 ### Model choice
 
 Qwen3.8 27B ranked first by quality score among OpenRouter's 19 free models on a live tracker checked October 2, 2026 ([CostGoat](https://costgoat.com/pricing/openrouter-free-models)). OpenRouter's model page lists a 262,144-token context and support for `tools` and `tool_choice`, which the Orchestrator's ReAct loop needs ([model page](https://openrouter.ai/models/qwen/qwen3.8-27b:free)).
 
-OpenRouter's free list changes without notice, so the model is one config value. If the primary model fails or leaves the free list, the system falls back to OpenRouter's Free Models Router (`openrouter/free`), which routes across the free models available at the time. The team re-checks the free list before Pitch Week and Launch Week.
+OpenRouter's free list changes without notice, so the model is one config value.
+If the primary model fails or leaves the free list, each role's `ModelPool` falls back to OpenRouter's Free Models Router, which routes across the free models available at the time.
+Through LiteLLM its model string is `openrouter/openrouter/free`; the shorter `openrouter/free` resolves to a model named `free` and fails.
+The team re-checks the free list before Pitch Week and Launch Week.
+The model configuration lives in the `jac.toml` and `agents/models.jac` shown in Section 3.
 
-```toml
-# jac.toml
-[plugins.byllm.model]
-default_model = "openrouter/qwen/qwen3.8-27b:free"   # LiteLLM's OpenRouter prefix; OPENROUTER_API_KEY in the environment
+| Role | Model instance | Temperature | Notes |
+| --- | --- | --- | --- |
+| Research sub-agents | `research_llm` | 0.2 | Extraction and summarization |
+| Specialists | `specialist_llm` | 0.8 | Randomness is intended (Section 7) |
+| Arbiter | `arbiter_llm` | 0.2 | The final decision point |
+| Orchestrator | `orchestrator_llm` | 0.2 | One bounded ReAct loop per run |
 
-[plugins.byllm.call_params]
-temperature = 0.2
-```
+Each role has its own instance because a call's parameters are written into the instance it runs through, and concurrent calls sharing one instance would send each other's temperatures (Section 3).
 
-| Role | Temperature | Notes |
-| --- | --- | --- |
-| Research sub-agents | 0.2 | Extraction and summarization |
-| Specialists | 0.8 | Randomness is intended (Section 7) |
-| Arbiter | 0.2 | The final decision point |
-| Orchestrator | 0.2 | One bounded ReAct loop per run |
-
-Development and CI use `MockLLM` or a local model through Ollama, which byLLM also supports, so they never draw on the production account's daily cap. OpenRouter counts every key on an account against the same limit.
+Development and CI use `MockLLM`, so they never draw on the production account's daily cap; OpenRouter counts every key on an account against the same limit.
+A local model through Ollama is fine for manual prompt work, but local models are unreliable at tool calling, so Orchestrator tests always use `MockLLM`.
 
 ### Requests per run (standard configuration: 20 tickers, K = 3)
 
@@ -566,17 +795,21 @@ Development and CI use `MockLLM` or a local model through Ollama, which byLLM al
 | Specialist samples | 300 | 5 specialists × K = 3 × 20 tickers |
 | Extra samples near thresholds | About 20 | Sequential sampling on ambiguous tickers |
 | Arbiter | 20 | One per ticker |
-| Orchestrator loop | About 30 | ReAct iterations, capped |
-| **Total** | **About 440** | **At 18 requests a minute, at least 25 minutes of model time** |
+| Orchestrator loop | About 30 | ReAct iterations with batched tools, capped |
+| Parse retries | About 20 | `max_output_retries = 1`; every retry is a request |
+| **Total** | **About 460** | **At 18 requests a minute, at least 26 minutes of model time** |
 
-An on-demand report on a ticker not already covered that day uses about 22 requests: 3 research, 15 specialist samples, 1 Arbiter, and a few Orchestrator steps. A global cap of 15 new reports a day bounds reports at about 330 requests, so the daily total stays under about 770 of the 1,000 allowed, leaving room for retries.
+An on-demand report on a ticker not already covered that day uses about 22 requests: 3 research, 15 specialist samples, 1 Arbiter, and a few Orchestrator steps.
+A global cap of 15 new reports a day bounds reports at about 330 requests, so the daily total stays under about 790 of the 1,000 allowed, leaving room for further retries.
 
 ### Request controls
 
-- **One shared limiter.** Every model request in the app passes a token bucket set to 18 requests a minute.
-- **Check before running.** Preflight reads `free_model_daily_requests` from OpenRouter's `GET /api/v1/key` endpoint and switches to reduced mode (K = 1, shortlist of 10) if fewer than 500 requests remain for the UTC day.
+- **One shared limiter.** Every model request in the app passes the `LimitedPool` limiter, set to 18 requests a minute (Section 3).
+  It sits at the provider-request level, so parse retries and ReAct iterations are counted too.
+- **Count requests ourselves.** The limiter also increments a per-UTC-day request counter stored in the graph, because OpenRouter's `GET /api/v1/key` endpoint may not report free-model usage directly; the Foundations phase confirms what that endpoint returns.
+- **Check before running.** Preflight reads the day's count and switches to reduced mode (K = 1, shortlist of 10) if fewer than 500 requests remain for the UTC day.
 - **Protect the morning run.** On-demand reports become cache-only when fewer than 150 requests remain.
-- **Back off on 429.** Retry with exponential backoff and honor `Retry-After` when OpenRouter sends it.
+- **Back off on 429.** byLLM does not retry rate-limit errors, so the call-site wrapper retries with exponential backoff and honors `Retry-After` when OpenRouter sends it.
 - **Keep the balance positive.** OpenRouter can return 402 errors even on free models when an account's balance is negative.
 
 ## 13. Evaluation and validation
@@ -586,6 +819,7 @@ The system is evaluated in three layers: a historical harness before launch, a l
 ### Layer 1: historical harness (October)
 
 - **Deterministic parts on full history.** The screen, sizing, and risk gate are backtested on 2016–2026 bars at no LLM cost, to tune screen weights and gate limits.
+  The backtest uses point-in-time S&P 500 membership (Section 5), so companies that left the index stay in the history.
 - **LLM pipeline on a small sample.** A reduced configuration (5 tickers, K = 1) replays about 40 trading days, spread over several days to stay within the request cap, to check that the pipeline runs end to end and that outputs are sane.
 - **Look-ahead control.** Replayed dates must fall after each model's training cutoff, and collectors serve only data published before the simulated decision time.
 - **Pipeline tests.** `MockLLM` runs cover every branch of the Orchestrator and Run Guard in CI without API cost.
@@ -629,11 +863,11 @@ The largest risks are untrusted text reaching agents, leaked credentials, and a 
 | --- | --- |
 | Prompt injection in news or filings | Raw text reaches only research sub-agents, which have no tools; it is wrapped in delimiters and labeled as untrusted data; downstream agents see only typed reports, never raw text |
 | An agent tries to trade outside limits | Orders exist only as risk-gate outputs; the executor rejects any order without a matching `RiskCheck` approval |
-| Leaked API keys | Keys live in environment variables and jac-scale secrets, never in the repo; GitHub secret scanning is on |
-| Default credentials | Set `JWT_SECRET` and the admin password before the first deploy; jac-scale's defaults are not safe for public hosting |
-| Unauthorized run triggers | The daily run is a scheduled walker with no public endpoint; manual reruns require an admin account |
-| Abuse of on-demand reports | Per-user and global daily caps; sign-in required; jac-scale applies NGINX rate limiting at the Kubernetes ingress |
-| Stolen Alpaca OAuth tokens (stretch) | If account connections are built: encrypted at rest, kept on the user's private graph, never sent to the browser, deleted on disconnect |
+| Leaked API keys | Keys live in exported environment variables locally and in `[scale.secrets]` when deployed, never in the repo; GitHub secret scanning is on |
+| Default credentials | Before the first deploy, set the token-signing secret (`[serve.auth] secret`, from `JAC_SERVE_AUTH_SECRET`) and the admin password (`[scale.admin] default_password`, which applies only when the admin account is first created; the built-in default is admin/changeme), change the Prometheus admin password, and turn off the public API docs (`[serve] docs_enabled = false`) |
+| Unauthorized run triggers | The daily run is a static scheduled job with no public endpoint; manual reruns go through an endpoint that checks for an admin account, never through the scheduler's dynamic `/jobs` API, which any signed-in user can call |
+| Abuse of on-demand reports | Per-user and global daily caps; sign-in required; NGINX rate limiting at the Kubernetes ingress (`ingress_limit_rps`) |
+| Stolen Alpaca OAuth tokens (stretch) | If account connections are built: encrypted at rest, kept on the user's own root, never sent to the browser, deleted on disconnect |
 
 ### Compliance
 
@@ -644,20 +878,24 @@ The largest risks are untrusted text reaching agents, leaked credentials, and a 
 
 ### Observability
 
-- **Agent telemetry.** byLLM's telemetry callback records caller, model, latency, status, and token cost for every agent call; jac-scale exposes summaries at `/admin/llm/telemetry`.
-- **Pipeline metrics.** Prometheus metrics for walker durations and HTTP traffic; a run-health panel on the Admin page.
+- **Agent telemetry.** byLLM's telemetry callback (`register_agent_callback`) records caller, model, latency, status, tokens, and the parent call for every agent call, so nested sub-agent calls group under the Orchestrator step that made them.
+  The server exposes summaries and traces at the admin-only `/admin/llm/telemetry/summary` and `/admin/llm/telemetry/traces`.
+- **Pipeline metrics.** Prometheus metrics for walker durations and HTTP traffic, enabled with `[scale.monitoring] enabled = true` and `walker_metrics = true`; a run-health panel on the Admin page.
 - **Alerts.** A Discord or Slack webhook fires when a run falls back, a collector fails twice in a row, an order is rejected, or daily model requests cross 80% of the cap.
 
 ### Testing
 
 | Level | What | Tooling |
 | --- | --- | --- |
-| Unit | Indicators, consensus math, sizing, every risk-gate rule | Jac `test` blocks |
-| Property | The gate never produces a portfolio breaking any cap, over thousands of random decision sets | Randomized tests |
-| Agent contract | Each agent returns a valid typed object; malformed output triggers the documented retry | `MockLLM` with scripted good and bad outputs |
-| Collector | Parsing and rate limiting against recorded responses | Recorded fixtures |
+| Unit | Indicators, consensus math, sizing, every risk-gate rule | Jac `test` blocks in `*.test.jac` or `*_tests.jac` files |
+| Property | The gate never produces a portfolio breaking any cap, over thousands of random decision sets | Hypothesis, called inside `test` blocks |
+| Agent contract | Each agent returns a valid typed object; malformed output triggers the documented retry | `MockLLM` scripted with `MockRawResponse`, `MockError`, and `MockToolCall` outputs; run serially, since concurrent calls take scripted outputs in random order |
+| Collector | Parsing and rate limiting against recorded responses | Recorded fixtures, served through base-URL overrides such as `ALPACA_BASE_URL` |
+| Endpoint smoke | Every `def:pub` function and walker the dashboard uses answers a POST | `JacTestClient` |
 | Integration | Full run against Alpaca paper with a tiny shortlist and mock agents | Nightly CI job |
 | Failure drills | A source down, the LLM provider down, an Orchestrator timeout | Fault injection flags |
+
+Jac tests run in parallel workers and `root` keeps its data between runs, so each test creates and deletes its own nodes and never counts everything attached to `root`.
 
 ## 15. Build plan and milestones
 
@@ -670,14 +908,16 @@ The forward test starts as soon as the Action agent works, which gives about sev
 ### Phases and exit criteria
 
 1. **Foundations (Oct 1–7).** Repo, Flowline board, `jac.toml`, node and `obj` definitions, Alpaca paper accounts, the OpenRouter account with its $10 credit purchase, CI with `MockLLM`.
-   - Exit: `jac start` serves a health walker; a test `by llm()` call reaches the free model through OpenRouter; CI is green.
+   The `jac create` template now in the repo is replaced with the layout in Section 3, and module paths for node types are frozen.
+   Two spikes run this week: the role model instances and limiter making real calls to the free model, including the Orchestrator's tool loop; and the Alpaca order-rule spike (Section 8).
+   - Exit: `jac run` serves a health endpoint; a test `by research_llm()` call reaches the free model through OpenRouter; CI is green.
 2. **Research (Oct 5–16).** Collectors with caching and rate limits, the S&P 500 screener, the three per-ticker research sub-agents, and the Macro sub-agent.
    - Exit: a 20-ticker research pass finishes in under 30 minutes with at least 90% of reports complete and every claim cited.
 3. **Analysis (Oct 14–25).** Five specialists, the consensus engine with bootstrap intervals, the Arbiter, Orchestrator tools, the Run Guard with fallback, and the shared request limiter.
    - Exit: a full dry run produces valid decisions for every covered ticker within the request budget; fallback mode passes its drill.
 4. **Action (Oct 21–30).** Sizing, risk gate, executor, reconciliation job, insight cards.
    - Exit: the team portfolio trades on Alpaca paper for three consecutive days with zero gate bypasses.
-5. **Dashboard MVP and first deploy (Oct 26–Nov 1).** Portfolio, Today, and Decision detail pages, public and mobile-friendly, deployed with `jac start --scale`.
+5. **Dashboard MVP and first deploy (Oct 26–Nov 1).** Portfolio, Today, and Decision detail pages, public and mobile-friendly, deployed with `jac scale deploy`.
    - Exit: classmates can open the public link and follow a trade from order back to evidence.
 6. **Launch features (Nov 3–15).** Sign-in, on-demand reports, the Specialists page, landing page, and demo video.
    - Exit: a new user can sign up and get a report in under 5 minutes on the deployed app.
@@ -731,7 +971,7 @@ Prediction markets need their own evaluation metric, the Brier score of the agen
 | Single-agent baseline | A second paper portfolio run by one agent with the same tools | Roughly doubles daily model requests |
 | Options and short-sale signals | Put/call and implied-volatility proxies from Alpaca's free indicative options feed; FINRA daily short-sale volume | Short-sale volume is not short interest |
 | Congressional trade disclosures | House and Senate periodic transaction reports | Scraping required; disclosures arrive weeks after trades |
-| Live committee page | Real-time run progress through a jac-scale WebSocket walker | Dashboard polish |
+| Live committee page | Real-time run progress through polling or a streaming (SSE) endpoint | Dashboard polish |
 | Backup data providers | FMP (250 calls a day) and Twelve Data (800 calls a day) | Only if a core source proves unreliable |
 
 ## 17. Risks and open questions
@@ -742,7 +982,7 @@ The biggest schedule risks are external approvals and the maturity of the Jac to
 
 | Risk | Likelihood | Impact | Mitigation |
 | --- | --- | --- | --- |
-| Jac or byLLM behavior differs from the docs, or a release breaks the build | Medium | High | Pin versions; spike the Orchestrator's tool loop on the free model in week 1 |
+| Jac or byLLM behavior differs from the docs, or a release breaks the build | Medium | High | Pin Jac 0.37.12; treat the bundled `jac guide` references as authoritative; follow the implementation rules in Section 3; spike the Orchestrator's tool loop on the free model in week 1 |
 | The free model leaves OpenRouter's free list or is congested at peak hours | High | High | The model is one config value; fallback to the Free Models Router; shared limiter and retries |
 | The free model is too weak for reliable typed outputs or tool use | Medium | High | Small, focused prompts; typed returns with one retry; measure the validation failure rate in week 2 and switch models if it exceeds 5% |
 | The daily free-model cap is reached | Medium | Medium | Preflight budget check, reduced mode, cache-only reports (Section 12) |
@@ -751,7 +991,8 @@ The biggest schedule risks are external approvals and the maturity of the Jac to
 | Results are noise over seven weeks | High | Medium | Frame the test as architecture validation; report intervals; compare against two baselines |
 | Parameters overfit to the backtest | Medium | Medium | Tune only deterministic parts on history; freeze all parameters before the live test |
 | Look-ahead bias in historical replays | Medium | Medium | Replay only dates after the model's training cutoff, with point-in-time data |
-| The Kubernetes cluster for `jac start --scale` costs money or takes time to set up | Medium | High | Choose and test the cluster in week 1; deploy the MVP before Pitch Week |
+| The Kubernetes cluster for `jac scale deploy` costs money or takes time to set up | Medium | High | Choose and test the hosting in week 1, including the single-VM option in the open questions; deploy the MVP before Pitch Week |
+| Alpaca order rules reject exits or adds (shares held by stops, wash-trade checks, the pattern-day-trader rule) | Medium | High | Week-1 order-rule spike (Section 8); whole-share sizing; cancel the stop before an exit; a starting balance of at least $25,000 |
 | The public app is down during Pitch or Launch Week | Low | High | Health checks, alerting, a rehearsed redeploy |
 
 ### Cut line if behind schedule
@@ -761,17 +1002,19 @@ Stretch goals already sit outside the core. If the core itself falls behind, dro
 ### Open questions
 
 - [ ] Who makes the one-time $10 OpenRouter credit purchase that raises the free-model cap to 1,000 requests a day?
-- [ ] Which Kubernetes cluster will `jac start --scale` deploy to (AWS, GCP, or another provider), and who pays for it?
+- [ ] Where does the app run, and who pays for it? `jac scale deploy` needs an existing Kubernetes cluster (such as EKS, GKE, or k3s on one VM) and has no AWS- or GCP-specific provisioning; the alternative is `jac run` on a single VM with a managed Postgres through `JAC_DB_URL`.
 - [ ] Who owns each area in Section 15?
-- [ ] What starting balance should the team paper portfolio use?
+- [ ] What starting balance should the team paper portfolio use? At least $25,000 keeps a same-day stop-out from triggering the pattern-day-trader rule; Alpaca's paper default is $100,000.
 - [ ] What launch-week user target should the marketing campaign commit to (proposed: 50)?
 
 ## 18. References
 
 Free-tier limits and product details were checked between September 30 and October 3, 2026 and change often; re-verify before relying on any figure.
+The Jac details in this document were verified on October 3, 2026 against Jac 0.37.12, its bundled guides, and spike programs; where the website docs below disagree with the bundled guides, the guides win.
 
 ### Platform documentation
 
+- Bundled Jac guides for the installed version: `jac guide`, `jac guide <name> --sections`, and `jac guide --search <keyword>`
 - [Jac documentation index](https://docs.jaseci.org/llms.txt), Jaseci Labs
 - [byLLM reference](https://docs.jaseci.org/reference/plugins/byllm/), Jaseci Labs
 - [jac-scale reference](https://docs.jaseci.org/reference/plugins/jac-scale/), Jaseci Labs
