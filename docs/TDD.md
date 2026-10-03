@@ -671,9 +671,9 @@ The gate records every approval, resize, and rejection with the rule that trigge
 - **Reconciliation.** A scheduled interval job polls order status from 9:45 to 10:00 a.m. and again at 3:50 p.m. to record fills; the 4:30 p.m. job reconciles positions against Alpaca's [`/v2/positions`](https://docs.alpaca.markets/us/reference/getallopenpositions) and flags any drift.
   Alpaca offers a [`trade_updates` stream](https://docs.alpaca.markets/us/docs/websocket-streaming), but the Jac docs describe no server-startup hook for a long-lived client connection, so the design polls instead.
 - **Stops and adds.** Alpaca's wash-trade protection always rejects a new order whose opposite side is already open ([user protection](https://docs.alpaca.markets/us/docs/user-protection)), which shapes three rules:
-  the stop is placed only after the entry buy fills, and a partial fill gets its stop after the 3:50 p.m. cancel ([paper trading fills partially](https://docs.alpaca.markets/us/docs/paper-trading) about 10% of the time);
-  adding to a held position first cancels its stop sell, then buys, then re-places the stop;
-  an exit or trim cancels the stop first, because an open stop reserves its shares, then sells and re-places a stop for any shares that remain.
+    - The stop is placed only after the entry buy fills, and a partial fill gets its stop after the 3:50 p.m. cancel ([paper trading fills partially](https://docs.alpaca.markets/us/docs/paper-trading) about 10% of the time).
+    - Adding to a held position first cancels its stop sell, then buys, then re-places the stop.
+    - An exit or trim cancels the stop first, because an open stop reserves its shares, then sells and re-places a stop for any shares that remain.
 - **Stop expiry.** Alpaca cancels GTC orders 90 days after creation ([orders at Alpaca](https://docs.alpaca.markets/us/docs/orders-at-alpaca)), so the morning run re-places any stop that expired.
 - **Exits.** Time stops and thesis invalidations are checked each morning and become SELL decisions.
 - **Order-rule spike.** Before the Action phase, a week-1 spike on the paper account confirms the stop and add sequences above, and whether Alpaca's [one-triggers-other orders](https://docs.alpaca.markets/us/docs/orders-at-alpaca) can attach the stop to the entry instead.
