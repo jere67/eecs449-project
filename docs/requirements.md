@@ -613,7 +613,7 @@ The TDD selects specific technologies and versions (including Jac 0.37.12, byLLM
 
 ## 8. Out of scope / non-goals for the core release
 
-The following shall not be required for the core release:
+The following shall not be required for the **core release**:
 
 - Real-money trading.
 - Brokerage custody.
@@ -638,7 +638,7 @@ The following shall not be required for the core release:
 - Live committee streaming.
 - Backup data providers unless a core source becomes unreliable.
 
-Stretch features may begin only after the stock pipeline has run cleanly for two weeks, and none may reduce the safety or reliability of the core pipeline.
+Stretch features may begin only after the stock pipeline has run cleanly, and none may reduce the safety or reliability of the core pipeline.
 
 ---
 
