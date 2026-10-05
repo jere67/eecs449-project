@@ -752,15 +752,15 @@ Changes to live-test parameters shall not be made during the live evaluation win
 
 ## 15. Source basis
 
-This requirements specification is derived from the uploaded **Autonomous Trading Agent — Technical Design Document**, especially its sections covering goals and success criteria, orchestration, universe selection, research inputs, stochastic consensus, action/risk/execution, product surfaces, dashboard behavior, persistence, request budgets, evaluation, security/testing, milestones, stretch goals, and open questions. fileciteturn2file0L5-L15
+This requirements specification is derived from the **Autonomous Trading Agent — Technical Design Document**, especially its sections covering goals and success criteria, orchestration, universe selection, research inputs, stochastic consensus, action/risk/execution, product surfaces, dashboard behavior, persistence, request budgets, evaluation, security/testing, milestones, stretch goals, and open questions.
 
-The TDD explicitly distinguishes proposed values and open questions; this document preserves those as knowledge gaps rather than presenting them as settled requirements. fileciteturn4file2L1-L8
+The TDD explicitly distinguishes proposed values and open questions; this document preserves those as knowledge gaps rather than presenting them as settled requirements.
 
-The dashboard, authenticated report flow, transparency requirements, and daily data/report reuse are based on the product-surface and dashboard sections. fileciteturn4file0L1-L1
+The dashboard, authenticated report flow, transparency requirements, and daily data/report reuse are based on the product-surface and dashboard sections.
 
-The risk, execution, and insight behaviors are based on the action/execution section of the TDD. fileciteturn4file1L1-L2
+The risk, execution, and insight behaviors are based on the action/execution section of the TDD.
 
-The evaluation, security, observability, testing, and milestone requirements are based on the corresponding TDD sections. fileciteturn4file15L1-L1
+The evaluation, security, observability, testing, and milestone requirements are based on the corresponding TDD sections.
 
 ---
 
