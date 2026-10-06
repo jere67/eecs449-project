@@ -14,9 +14,13 @@ If your change contradicts either one, update the document in the same PR or rai
 - Branch from `main` as `<your-name>/<short-topic>`, for example `jeremymoon/screener`.
 - Keep each PR to one issue, and put `Closes #<n>` in its description.
 - `main` needs one approving review and all conversations resolved before merging.
-- When your work builds on a PR that is still open, branch from that PR's branch and set your PR's base to it (a stacked PR).
-  Merge stacks from the bottom up with "Create a merge commit", so the PRs above don't need rebasing.
-  GitHub retargets the next PR to `main` once its base branch is merged and deleted.
+- When your work builds on a PR that is still open, make it a stacked PR with [`gh stack`](https://gh.io/stacks) (`gh extension install github/gh-stack`):
+  - `gh stack init <branch>` starts a stack on `main`; `gh stack add <branch>` adds the next layer on top.
+  - `gh stack submit` pushes every branch and opens or updates the PRs, each based on the layer below.
+  - After changing a lower branch, `gh stack rebase` cascades the change upward and `gh stack push` pushes the stack.
+  - `gh stack sync` pulls in changes teammates pushed and keeps the stack on GitHub in step.
+  - Each PR in a stack still needs its own approval.
+    `gh stack merge` (or the stack merge on GitHub) lands the approved PRs together in one all-or-nothing merge.
 
 ## Commits
 
