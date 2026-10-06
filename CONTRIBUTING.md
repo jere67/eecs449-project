@@ -58,9 +58,12 @@ Trust the guides bundled with the compiler (`jac guide`, starting with `jac guid
 Read the implementation rules in [TDD §3](docs/TDD.md#jac-implementation-rules) before writing agent, endpoint, or concurrency code.
 The ones that bite most often:
 
-- Every `def:pub` function and walker must be imported by `main.jac`, or its endpoint returns 404 or 405.
+- Every endpoint must be imported by name in `main.jac`, or it returns 404 or 405.
+  Mark endpoints `def:pub` or `def:priv` (`walker:pub` or `walker:priv`) explicitly; `tests/endpoints_tests.jac` fails for any marked endpoint the server does not serve.
 - Never name a file `test_*.jac`; use `module_tests.jac` or a `module.test.jac` annex.
-- Import server modules from the project root (`import from analysis.consensus { ... }`), never with `..`.
+- Import project modules from the project root (`import from analysis.consensus { ... }`), never with `..`.
+  This applies to client components too: a `..` import passes `jac check` but breaks `jac build`.
+- Run `jac check .`, not `jac check main.jac`; checking one file does not check the modules it imports.
 - Never touch the graph inside `flow`; write to it after `wait`.
 - Give each agent role its own model instance.
 
