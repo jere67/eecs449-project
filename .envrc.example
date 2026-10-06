@@ -1,0 +1,18 @@
+# Copy to .envrc and fill in; direnv exports these when you cd into the repo.
+# `jac run` does not read .env files (TDD §3, rule 10), so the variables must be exported.
+# Never commit the filled-in copy; .envrc is gitignored.
+
+# Admin account created on first boot (defaults to admin/changeme when unset).
+export ADMIN_PASSWORD=""
+
+# OpenRouter, for every model call (#10, #12).
+export OPENROUTER_API_KEY=""
+
+# Alpaca paper trading and market data (#13, #18).
+export ALPACA_API_KEY=""
+export ALPACA_SECRET_KEY=""
+
+# Free data sources (#22, #23, #24).
+export FINNHUB_API_KEY=""
+export FRED_API_KEY=""
+export SEC_USER_AGENT="trading-agent team-contact@example.com"

@@ -1,4 +1,9 @@
 .jac/
 node_modules/
-server.log
 dist/
+server.log
+.env
+.envrc
+.DS_Store
+.vscode/
+.idea/
