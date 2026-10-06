@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  JAC_VERSION: 0.37.12
+  # sha256 of jac-0.37.12-linux-x86_64 from the v0.37.12 release assets.
+  JAC_SHA256: 078e0b51556cef698faa43bc080cfeb52e0e316fa7b0771afa1cf8990911712a
+
+jobs:
+  check:
+    name: Check, test, build, boot
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Jac ${{ env.JAC_VERSION }}
+        run: |
+          curl -fsSL -o jac "https://github.com/jaseci-labs/jac/releases/download/v${JAC_VERSION}/jac-${JAC_VERSION}-linux-x86_64"
+          echo "${JAC_SHA256}  jac" | sha256sum --check --strict
+          chmod +x jac
+          mkdir -p "$HOME/.local/bin"
+          mv jac "$HOME/.local/bin/jac"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Show Jac version
+        run: jac --version
+
+      - name: Cache the Jac runtime and embedded Postgres
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/jac/rt
+            ~/.cache/jac/pg
+          key: jac-runtime-${{ runner.os }}-${{ env.JAC_VERSION }}
+
+      - name: Cache project dependencies
+        uses: actions/cache@v6
+        with:
+          path: |
+            .jac/venv
+            .jac/client/node_modules
+          key: jac-deps-${{ runner.os }}-${{ env.JAC_VERSION }}-${{ hashFiles('jac.toml') }}
+
+      - name: Install dependencies
+        run: jac install
+
+      - name: Type-check and lint
+        run: jac check .
+
+      - name: Test
+        run: jac test
+
+      - name: Build
+        run: jac build
+
+      - name: Boot the production build
+        run: |
+          jac run dist/trading-agent.jab < /dev/null > server.log 2>&1 &
+          for _ in $(seq 1 120); do
+            curl -sf http://localhost:8000/healthz > /dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:8000/healthz
+          curl -sf -X POST http://localhost:8000/function/health \
+            -H 'Content-Type: application/json' -d '{}' | grep -q '"status": "ok"'
+          curl -sf http://localhost:8000/ | grep -q '<title>Trading Agent</title>'
+          echo "Server booted and answered."
+
+      - name: Server log
+        if: always()
+        run: cat server.log 2>/dev/null || true
