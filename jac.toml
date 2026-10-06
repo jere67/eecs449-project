@@ -32,6 +32,10 @@ default = "server"
 [byllm.model]
 default_model = "openrouter/qwen/qwen3.8-27b:free"
 
+[byllm.call_params]
+temperature = 0.2
+max_output_retries = 1
+
 [check.lint]
 select = ["all"]
 
