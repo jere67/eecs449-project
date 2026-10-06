@@ -29,6 +29,9 @@ watchdog = ">=3.0.0"
 [placement]
 default = "server"
 
+[byllm.model]
+default_model = "openrouter/qwen/qwen3.8-27b:free"
+
 [check.lint]
 select = ["all"]
 
