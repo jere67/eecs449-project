@@ -59,5 +59,5 @@ def:pub read_team_graph -> list[str] {
 
 """Every research record a caller can reach, as stored nodes, the way the dashboard reads them."""
 def:pub read_research -> list[ResearchRecord] {
-    return [root.shared -->[?:Portfolio] ->:Ran:-> ->:Covers:-> ->:Researched:->];
+    return [root.shared -->[?:Portfolio] ->:Ran:-> ->:Covers:-> ->:Researched:->[?:ResearchRecord]];
 }
