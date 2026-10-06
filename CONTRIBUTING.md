@@ -65,7 +65,9 @@ The ones that bite most often:
   This applies to client components too: a `..` import passes `jac check` but breaks `jac build`.
 - Run `jac check .`, not `jac check main.jac`; checking one file does not check the modules it imports.
 - Never touch the graph inside `flow`; write to it after `wait`.
-- Give each agent role its own model instance.
+- Call models through a role instance in `agents/models.jac` (`by research_llm(...)`), never the builtin `llm`, which skips the rate limiter.
+  A test fails if any module uses the builtin.
+  Add a new instance for a new role rather than sharing one, since call params leak between concurrent calls on one instance.
 
 ## Secrets
 

@@ -8,6 +8,10 @@ export ADMIN_PASSWORD=""
 # OpenRouter, for every model call (#10, #12).
 export OPENROUTER_API_KEY=""
 
+# Kill switch: set to 1 to make every model call fail fast with no request, so the
+# pipeline takes its deterministic fallbacks (TDD §2, principle 6).
+export TRADING_AGENT_DISABLE_MODELS=""
+
 # Alpaca paper trading and market data (#13, #18).
 export ALPACA_API_KEY=""
 export ALPACA_SECRET_KEY=""
