@@ -101,6 +101,27 @@ test "the limiter spaces requests evenly and counts them per UTC day" {
     assert sum(limiter.sent_by_day.values()) == 5;
 }
 
+test "a late wake-up does not let the next request go out early" {
+    limiter = RequestLimiter(per_minute=600);
+    real_sleep = time.sleep;
+    # Oversleep by more than one 0.1 s slot, as a busy machine can.
+    def late_sleep(seconds: float) {
+        real_sleep(seconds + 0.25);
+    }
+    time.sleep = late_sleep;
+    try {
+        sent_at: list[float] = [];
+        for _ in range(3) {
+            limiter.acquire();
+            sent_at.append(time.monotonic());
+        }
+    } finally {
+        time.sleep = real_sleep;
+    }
+    gaps = [b - a for (a, b) in zip(sent_at, sent_at[1:])];
+    assert min(gaps) >= 0.099, gaps;
+}
+
 test "every role has its own model instance and all share one limiter" {
     roles = [research_llm, specialist_llm, arbiter_llm, orchestrator_llm, retry_llm];
     assert len({id(m) for m in roles}) == len(roles);

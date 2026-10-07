@@ -43,7 +43,8 @@ obj RequestLimiter {
             now = time.monotonic();
             if self._next_slot > now {
                 time.sleep(self._next_slot - now);
-                now = self._next_slot;
+                # Space from the real wake-up, which can be late, not the scheduled slot.
+                now = time.monotonic();
             }
             self._next_slot = now + 60.0 / self.per_minute;
             self.sent += 1;
