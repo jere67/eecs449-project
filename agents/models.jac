@@ -11,7 +11,7 @@ import os;
 import threading;
 import time;
 import from datetime { datetime, timezone }
-import from jaclang.byllm.lib { Model, RateLimitError }
+import from jaclang.byllm.lib { AuthenticationError, ByLLMError, ConfigurationError, Model, RateLimitError }
 
 glob PRIMARY_MODEL: str = "openrouter/qwen/qwen3.8-27b:free";
 glob FALLBACK_MODEL: str = "openrouter/openrouter/free";
@@ -78,10 +78,16 @@ obj LimitedModel(Model) {
             self.limiter.acquire();
             try {
                 return super.model_call_no_stream(params);
+            } except AuthenticationError {
+                raise;
+            } except ConfigurationError {
+                raise;
             } except RateLimitError {
                 if attempt < self.max_429_retries {
                     time.sleep(self.backoff_s * (2 ** attempt));
                 }
+            } except ByLLMError {
+                break;
             }
         }
         params["model"] = self.fallback_model;

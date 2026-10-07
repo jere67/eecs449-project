@@ -37,7 +37,7 @@ glob test_llm: LimitedModel = LimitedModel(
 def cast_vote(ticker: str) -> Vote by test_llm(max_output_retries=1);
 
 """Run one scripted call and return the vote, the requests the fake saw, and the limiter count."""
-def scripted_vote(script: list[tuple[int, str]]) -> tuple[Vote, list[dict], int] {
+def scripted_vote(script: list[tuple[int, str]]) -> tuple[Vote, list[dict[str, object]], int] {
     fake.script = script;
     fake.requests = [];
     before = test_limiter.sent;
@@ -72,6 +72,13 @@ test "a primary model that stays rate limited falls back to the Free Models Rout
     assert vote.stance == Stance.BUY;
     assert [r["model"] for r in sent] == [PROVIDER_PRIMARY] * 4 + [PROVIDER_FALLBACK];
     assert counted == 5;
+}
+
+test "a primary model not found falls back to the Free Models Router" {
+    (vote, sent, counted) = scripted_vote([(404, ""), (200, VOTE_JSON)]);
+    assert vote.stance == Stance.BUY;
+    assert [r["model"] for r in sent] == [PROVIDER_PRIMARY, PROVIDER_FALLBACK];
+    assert counted == 2;
 }
 
 test "the kill switch stops calls before any request" {
