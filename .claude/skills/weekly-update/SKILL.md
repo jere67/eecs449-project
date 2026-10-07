@@ -28,7 +28,8 @@ Every weekly slide from October 7, 2026 on uses the same layout. Keep it exactly
 
 - "Group 12" top left and the slide date top right (a SUBTITLE layout placeholder).
 - A summary strip under the header: a text box in Instrument Sans 11pt that starts with a bold "This week:" and is at most two lines (about 240 characters). A third line collides with the cards.
-- Two cards. The left one has a pill reading "PRs", the right one a pill reading "Issues".
+- Two cards starting 1.20 in from the top. The left one has a pill reading "PRs", the right one a pill reading "Issues", each 0.17 in below the card's top edge, with the list starting just under the pill.
+  Duplicating the latest weekly slide carries this geometry over; don't move or resize anything unless text reaches a card's bottom edge.
 - PRs column: bold sub-headers "Merged" and "Opened", each with its own numbered list.
 - Issues column: bold sub-headers "Closed" and "Opened", each with its own numbered list.
 - Each line reads `<title> (#N)` in Instrument Sans 10pt. `#N` links to GitHub and is underlined in the dark text color (LIGHT1), never the theme's pink HYPERLINK color, which disappears on the pink card.
@@ -85,7 +86,8 @@ Use the PR or issue title verbatim.
 
 ### 3. Fit the columns
 
-Each column holds about 16 lines at 10pt, and a title wraps after about 55 characters.
+Each column holds about 16 lines at 10pt (two sub-headers plus 14 wrapped lines), and a title wraps after about 52 characters.
+Eight PRs with typical titles fill the PR card, so the script warns past that; still check the render, because its estimate is rough.
 When the Opened issues would not fit (more than about six, as a rule), group them by milestone, one line each:
 `<Milestone name>: <short comma-separated topics> (#a-#b)`, with the range linked to `https://github.com/jere67/eecs449-project/milestone/<number>`.
 If a milestone's numbers are not contiguous, list them (`#6, #9, #12`) and link each one.

@@ -43,8 +43,8 @@ PT = lambda n: {"magnitude": n, "unit": "PT"}
 
 SUMMARY_LEAD = "This week:"
 SUMMARY_MAX_CHARS = 240  # two lines at 11pt across the slide (237 fit); a third line hits the cards
-LIST_CHARS_PER_LINE = 55  # 10pt in a 4.14 in box with a 0.5 in hanging indent
-LIST_MAX_LINES = 16       # about 2.9 in of column height at 115% spacing
+LIST_CHARS_PER_LINE = 52  # 10pt in a 4.14 in box with a 0.5 in hanging indent
+LIST_MAX_LINES = 16       # 2 headers + 14 wrapped lines filled the PR card on Oct 7 with ~0.2 in to spare
 
 
 def rng(a, b):
@@ -108,7 +108,7 @@ def list_requests(box, repo, name):
             "style": {"bold": True}, "fields": "bold"}})
         reqs.append({"updateParagraphStyle": {"objectId": obj, "textRange": rng(start, end),
             "style": {"indentStart": PT(18), "indentFirstLine": PT(18),
-                      "spaceAbove": PT(0 if first else 8), "spaceBelow": PT(2)},
+                      "spaceAbove": PT(0 if first else 6), "spaceBelow": PT(2)},
             "fields": "indentStart,indentFirstLine,spaceAbove,spaceBelow"}})
         first = False
         j = i + 1
