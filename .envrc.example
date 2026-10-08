@@ -20,3 +20,16 @@ export ALPACA_SECRET_KEY=""
 export FINNHUB_API_KEY=""
 export FRED_API_KEY=""
 export SEC_USER_AGENT="trading-agent team-contact@example.com"
+
+# Optional base-URL overrides, one per source in research/sources.jac. Leave unset to call
+# the real providers; tests point them at a local fake that replays recorded fixtures.
+# export ALPACA_DATA_URL=""
+# export ALPACA_BASE_URL=""
+# export SEC_DATA_URL=""
+# export SEC_ARCHIVES_URL=""
+# export FINNHUB_BASE_URL=""
+# export FRED_BASE_URL=""
+# export WIKIPEDIA_BASE_URL=""
+
+# Set to a directory to save every live collector response as a test fixture (CONTRIBUTING.md).
+# export COLLECTOR_RECORD_DIR=""
