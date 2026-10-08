@@ -534,6 +534,10 @@ Earnings call transcripts are excluded because no reliable free source exists; c
 - **Respect licenses.** Several free tiers are personal or non-commercial.
   The public dashboard shows derived analysis and links to sources, not redistributed raw data.
 
+The shared machinery is `SourceClient` in `research/collector.jac`, and the per-source limits, run budgets, cache lifetimes, and freshness limits are versioned in `research/sources.jac`.
+None of the current sources has a daily cap, only per-minute limits, so each run budget is a guard against runaway loops; the 50% rule is enforced for any source that declares a daily limit.
+Freshness is measured from each datum's publish time, and the limits there are proposals until the Research exit run (#27) checks them against each provider's update cadence (GAP-15).
+
 ### Actions to start this week
 
 - [ ] Create team Alpaca paper accounts and API keys
