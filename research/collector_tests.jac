@@ -19,6 +19,7 @@ import from research.collector {
     SourceClient,
     SourceError,
     TokenBucket,
+    UnexpectedResponse,
     bucket_for,
     parse_utc,
     run_budget,
@@ -63,11 +64,12 @@ def fresh_cache -> RawCache {
     return RawCache(storage=store(base_path=tempfile.mkdtemp()) as Storage);
 }
 
-def make_client(cache: RawCache | None = None) -> SourceClient {
+def make_client(cache: RawCache | None = None, token: str = "s3cret") -> SourceClient {
     fake.reset();
     return SourceClient(
         source=TEST_SOURCE,
         headers={"User-Agent": "trading-agent tests"},
+        secrets={"token": token},
         cache=cache or fresh_cache(),
         bucket=TokenBucket(per_minute=60000, burst=100),
         backoff_s=0.0
@@ -76,7 +78,7 @@ def make_client(cache: RawCache | None = None) -> SourceClient {
 
 def get_items(client: SourceClient, budget: RunBudget, dataset: Dataset = NEWS) -> str {
     return client.get(
-        dataset, "/v1/items", budget, params={"symbol": "AAPL"}, secrets={"token": "s3cret"}, symbol="AAPL"
+        dataset, "/v1/items", budget, params={"symbol": "AAPL"}, symbol="AAPL"
     ).body;
 }
 
@@ -88,7 +90,7 @@ test "a fetch replays the recorded fixture through the base-URL override" {
     client = make_client();
     spent = budget();
     fetched = client.get(
-        NEWS, "/v1/items", spent, params={"symbol": "AAPL"}, secrets={"token": "s3cret"}, symbol="AAPL"
+        NEWS, "/v1/items", spent, params={"symbol": "AAPL"}, symbol="AAPL"
     );
     assert fetched.body == ITEMS_BODY;
     assert not fetched.from_cache;
@@ -102,9 +104,10 @@ test "a fetch replays the recorded fixture through the base-URL override" {
 
 test "a second fetch is a cache hit with no request and no budget spent" {
     client = make_client();
+    other_key = make_client(client.cache, token="other");
     spent = budget();
     first = get_items(client, spent);
-    again = client.get(NEWS, "/v1/items", spent, params={"symbol": "AAPL"}, secrets={"token": "other"}, symbol="AAPL");
+    again = other_key.get(NEWS, "/v1/items", spent, params={"symbol": "AAPL"}, symbol="AAPL");
     assert again.body == first;
     assert again.from_cache;
     assert len(fake.requests) == 1;
@@ -190,6 +193,24 @@ test "a client error such as 404 is not retried" {
     assert caught.status == 404;
     assert "unknown symbol" in str(caught);
     assert len(fake.requests) == 1;
+}
+
+test "a body the collector rejects is raised and never cached" {
+    cache = fresh_cache();
+    client = make_client(cache);
+    fake.script = [(200, {}, '{"error": "maxlag"}')];
+    def no_error(body: str) -> str {
+        return "error body" if "error" in body else "";
+    }
+    with testraises(UnexpectedResponse) as raised {
+        client.get(NEWS, "/v1/items", budget(), params={"symbol": "AAPL"}, symbol="AAPL", check=no_error);
+    }
+    assert (raised.value as UnexpectedResponse).detail == "error body";
+    assert not list(cache._storage().list_files("raw", recursive=True));
+    # The next fetch asks the source again and caches the good body.
+    again = client.get(NEWS, "/v1/items", budget(), params={"symbol": "AAPL"}, symbol="AAPL", check=no_error);
+    assert again.body == ITEMS_BODY and not again.from_cache;
+    assert len(fake.requests) == 2;
 }
 
 test "a connection failure is retried and raised with status 0" {
@@ -285,7 +306,7 @@ test "a recorded live response replays from a fresh fake, without its secrets" {
     fake.script = [(200, {}, ITEMS_BODY)];
     os.environ[RECORD_DIR_ENV] = str(record_dir);
     try {
-        client.get(NEWS, "/v1/items", budget(), params={"symbol": "AAPL", "limit": 2}, secrets={"token": "s3cret"});
+        client.get(NEWS, "/v1/items", budget(), params={"symbol": "AAPL", "limit": 2});
     } finally {
         del os.environ[RECORD_DIR_ENV];
     }
@@ -297,7 +318,7 @@ test "a recorded live response replays from a fresh fake, without its secrets" {
     replay.load(record_dir / "test");
     os.environ[URL_ENV] = replay.start();
     try {
-        again = make_client().get(NEWS, "/v1/items", budget(), params={"limit": 2, "symbol": "AAPL"}, secrets={"token": "other"});
+        again = make_client(token="other").get(NEWS, "/v1/items", budget(), params={"limit": 2, "symbol": "AAPL"});
     } finally {
         replay.stop();
         os.environ[URL_ENV] = FAKE_URL;
