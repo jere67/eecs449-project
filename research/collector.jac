@@ -7,7 +7,9 @@ A collector fetches through `SourceClient.get`, which:
 2. otherwise spends one call of the run's budget and waits for the source's token bucket;
 3. retries timeouts, connection errors, 429s, and 5xx responses with exponential backoff,
    honoring Retry-After, and spends budget and a token on every attempt;
-4. caches the raw body with its fetch time and returns it.
+4. checks the body when the collector passes `check`, so an error page sent with status 200
+   is never cached;
+5. caches the raw body with its fetch time and returns it.
 
 The collector parses the body into Stamped values with `Fetched.stamp`, and drops stale
 ones with `split_fresh`, which names each dropped datum for the report's data_gaps.
@@ -70,6 +72,10 @@ obj SourceError(Exception) {
 
 """The run has spent its calls for a source; the collector reports the gap."""
 obj BudgetExceeded(SourceError) {}
+
+"""A source answered, but not with what the collector expects, such as an error page sent
+with status 200 or a page whose layout changed."""
+obj UnexpectedResponse(SourceError) {}
 
 """Allows `burst` requests at once, then `per_minute` evenly, across every thread."""
 obj TokenBucket {
@@ -230,12 +236,14 @@ obj Fetched {
 
 """Fetches from one source with caching, its rate limit, retries, and the run budget.
 
-Secrets (API keys sent as query parameters) are kept out of cache keys, stamped URLs, and
-recorded fixtures; send header credentials through `headers`, which none of those keep.
+`secrets` are query parameters added to every request, such as an API key; they are kept
+out of cache keys, stamped URLs, and recorded fixtures. Header credentials go in `headers`,
+which none of those keep.
 """
 obj SourceClient {
     has source: Source;
     has headers: dict[str, str] = {},
+        secrets: dict[str, str] = {},
         cache: RawCache = RAW_CACHE,
         bucket: TokenBucket | None = None,
         max_retries: int = 3,
@@ -252,6 +260,8 @@ obj SourceClient {
     `symbol` and `day` place the response in the cache: pass the ticker or series, and the
     as-of date that makes the response final (a bar range's end date), so a response that
     can no longer change is never fetched twice. `day` defaults to today in UTC.
+    `check` returns what is wrong with a fresh body, or "" when it is usable; a body it
+    rejects is neither cached nor recorded, and raises UnexpectedResponse.
     Raises SourceError, or BudgetExceeded, which the collector reports as a data gap.
     """
     def get(
@@ -259,9 +269,9 @@ obj SourceClient {
         path: str,
         budget: RunBudget,
         params: dict[str, str | int | float] | None = None,
-        secrets: dict[str, str] | None = None,
         symbol: str = "",
-        day: str = ""
+        day: str = "",
+        check: Callable[[str], str] | None = None
     ) -> Fetched {
         if dataset.source != self.source.name {
             raise ValueError(f"dataset {dataset.name} belongs to {dataset.source}, not {self.source.name}");
@@ -296,7 +306,11 @@ obj SourceClient {
             );
         }
 
-        body = self._fetch(path, {**query, **(secrets or {})}, public_url, budget);
+        body = self._fetch(path, {**query, **self.secrets}, public_url, budget);
+        problem = check(body) if check else "";
+        if problem {
+            raise UnexpectedResponse(source=self.source.name, url=public_url, status=200, detail=problem);
+        }
         fetched = Fetched(
             source=self.source.name,
             dataset=dataset.name,
