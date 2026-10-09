@@ -79,7 +79,9 @@ The ones that bite most often:
 ## Secrets
 
 Never commit keys, tokens, or account IDs.
-`jac run` does not read `.env`, so export variables in your shell (direnv works well).
+Copy `.env.example` to `.env` and fill in your keys; `.env` is gitignored.
+`jac run` and `jac test` do not read `.env`, so export it into your shell with `set -a && source .env && set +a`.
+With direnv, `echo dotenv > .envrc && direnv allow` does that whenever you enter the repo.
 Share keys through a password manager, not in chat.
 
 ## Docs
