@@ -9,7 +9,7 @@ Every base URL can be overridden through its environment variable, which is how 
 replay recorded fixtures from a local server instead of calling the provider.
 """
 
-glob SOURCES_VERSION: str = "2026-10-08.1";
+glob SOURCES_VERSION: str = "2026-10-08.2";
 
 glob HOUR: float = 1.0;
 glob DAY: float = 24.0;
@@ -125,6 +125,14 @@ glob DATASETS: dict[str, Dataset] = {
     for d in [
         # Daily decisions use prior-day bars; four days covers a three-day weekend.
         Dataset(name="alpaca.bars", source="alpaca_data", max_age_hours=4 * DAY),
+        # The executor prices orders from the last IEX trade; outside market hours that is the
+        # last session's, so it may be as old as the newest bar.
+        Dataset(
+            name="alpaca.latest_trade",
+            source="alpaca_data",
+            max_age_hours=4 * DAY,
+            cache_ttl_hours=HOUR / 60
+        ),
         Dataset(
             name="alpaca.news",
             source="alpaca_data",
