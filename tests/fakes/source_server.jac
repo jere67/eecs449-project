@@ -10,6 +10,7 @@ Scripted responses are served first, in order, to inject 429s and outages. Every
 is logged, and a request with no recording gets a 404 and is listed in `misses`.
 """
 import json;
+import os;
 import threading;
 import from http.server { BaseHTTPRequestHandler, ThreadingHTTPServer }
 import from pathlib { Path }
@@ -80,6 +81,15 @@ obj FakeSource {
         }
         return (404, {}, f"no recording for {key}");
     }
+}
+
+"""Start a fake for one source with the recordings in `fixtures`, and point the source's
+base-URL override (`url_env`, such as WIKIPEDIA_BASE_URL) at it for the rest of the run."""
+def serve_source(url_env: str, fixtures: Path) -> FakeSource {
+    fake = FakeSource();
+    os.environ[url_env] = fake.start();
+    fake.load(fixtures);
+    return fake;
 }
 
 class _Handler(BaseHTTPRequestHandler) {
