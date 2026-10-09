@@ -473,7 +473,7 @@ This keeps LLM cost proportional to the shortlist rather than the index and make
 3. **Pull daily bars.** Fetch one year of daily bars for all constituents through Alpaca's [multi-symbol bars endpoint](https://docs.alpaca.markets/us/reference/stockbars) (a few dozen requests, well inside the free plan's [200 requests per minute](https://docs.alpaca.markets/us/docs/about-market-data-api)).
 4. **Filter for liquidity.** Drop names below $50 million of 20-day average dollar volume (proposed).
 5. **Score attention and setup.** Compute the composite score below from price, volume, news, and event features.
-6. **Diversify.** Take the top 15 by score with at most three per GICS sector.
+6. **Diversify.** Take the top 15 by score with at most three per GICS sector and one share class per company (GOOG or GOOGL, never both), since two classes are one company's risk.
 7. **Add mandatory names.** Append every open position, so exits are always evaluated.
 8. **Allow wildcards.** The Orchestrator may add up to three tickers from the macro brief or breaking news, with a logged reason.
 
@@ -486,6 +486,8 @@ $$
 
 Here mom is total return over 20 and 60 trading days, rvol is 5-day volume relative to its 60-day average, news is the 3-day article count from Alpaca's news feed, the indicator flags an earnings date within 5 trading days, vol is 20-day realized volatility, and z is the cross-sectional z-score.
 Starting weights are equal (w = 1); the evaluation harness tunes them on history before launch, and they are frozen during the live test.
+On the first live screen (October 8, 2026), unbounded z-scores let single outliers dominate: one name's news term was 10.8 and another's relative-volume term 10.1, so the earnings flag (worth 1) never changed a pick; the harness should compare clipping z at ±3, or log-scaling news counts and relative volume, when it tunes the weights.
+The screen lives in `research/screener.jac`, versioned by `SCREEN_VERSION`.
 
 ### Why a quant screen first
 
