@@ -13,7 +13,7 @@ recording, and it would add a dependency for four GET endpoints.
 Keys go in headers, which the cache and recorded fixtures never keep.
 """
 import json;
-import from datetime { datetime }
+import from datetime { date, datetime, time, timezone }
 import from urllib.parse { urlencode }
 import from zoneinfo { ZoneInfo }
 import from models.research { Stamped }
@@ -30,6 +30,10 @@ glob BARS_PER_PAGE: int = 10000;
 # A request with all 503 constituents worked (checked 2026-10-08); larger lists are split.
 glob SYMBOLS_PER_REQUEST: int = 600;
 glob REGULAR_CLOSE: str = "16:00";
+# Extended hours end at 20:00 New York time, and the free plan withholds the latest 15
+# minutes of SIP data, so a day's bar is final, and may be asked for, from 20:15.
+glob EXTENDED_CLOSE: time = time(20, 0);
+glob BARS_FINAL_AT: time = time(20, 15);
 glob MARKET_TZ: ZoneInfo = ZoneInfo("America/New_York");
 
 """One trading day's bar. `day` is the session date in New York."""
@@ -91,16 +95,19 @@ def alpaca_trading_client -> SourceClient {
     return SourceClient(source=SOURCES["alpaca_trading"], headers=alpaca_headers());
 }
 
-"""Today's date in New York, where sessions are dated."""
-def market_today -> str {
-    return datetime.now(MARKET_TZ).date().isoformat();
+"""Whether the bar for `day` (ISO date) can no longer change: an earlier day, or today
+after BARS_FINAL_AT in New York."""
+def bars_final(day: str, now: datetime | None = None) -> bool {
+    local = (now or datetime.now(MARKET_TZ)).astimezone(MARKET_TZ);
+    today = local.date().isoformat();
+    return day < today or (day == today and local.time() >= BARS_FINAL_AT);
 }
 
 """Daily bars from `start` through `end` (ISO dates, inclusive) for each symbol, and a gap
 for each symbol with none.
 
-`end` must be a completed session, before today in New York: its bars are then final and
-cached for good. Freshness is the caller's to check with split_fresh, since a backtest asks
+`end` must be a session whose bar is final (see bars_final): its bars are then cached for
+good. Freshness is the caller's to check with split_fresh, since a backtest asks
 for old bars on purpose.
 """
 def daily_bars(
@@ -110,13 +117,15 @@ def daily_bars(
     budget: RunBudget,
     client: SourceClient | None = None
 ) -> tuple[list[BarSeries], list[str]] {
-    today = market_today();
-    if end >= today {
-        raise ValueError(f"end {end} is not a completed session; use a day before {today}");
+    if not bars_final(end) {
+        raise ValueError(f"end {end} is not a completed session; its bar is final after {BARS_FINAL_AT:%H:%M} New York time");
     }
     data = client or alpaca_data_client();
     dataset = DATASETS["alpaca.bars"];
-    query = {"timeframe": "1Day", "start": start, "end": end, "adjustment": "all", "feed": "sip"};
+    # A date-only end means the end of that day, which is still in the future this evening and
+    # is refused as recent SIP data; the end of extended hours is the same bar, and is past.
+    closed = datetime.combine(date.fromisoformat(end), EXTENDED_CLOSE, MARKET_TZ).astimezone(timezone.utc);
+    query = {"timeframe": "1Day", "start": start, "end": closed.strftime("%Y-%m-%dT%H:%M:%SZ"), "adjustment": "all", "feed": "sip"};
     wanted = sorted(set(symbols));
     bars: dict[str, list[Bar]] = {};
     pages: dict[str, Fetched] = {};

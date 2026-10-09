@@ -5,13 +5,15 @@ import os;
 import tempfile;
 import from pathlib { Path }
 import from jaclang.data.storage.storage { Storage }
+import from datetime { datetime }
 import from research.alpaca {
+    MARKET_TZ,
     alpaca_data_client,
+    bars_final,
     assets,
     daily_bars,
     latest_trades,
-    market_calendar,
-    market_today
+    market_calendar
 }
 import from research.collector {
     MissingKey,
@@ -103,8 +105,13 @@ test "pages are followed and a symbol split across them is joined" {
 
 test "bars must end at a completed session" {
     with testraises(ValueError, `match="not a completed session") {
-        daily_bars(["AAPL"], "2026-01-01", market_today(), budget(), client());
+        daily_bars(["AAPL"], "2026-01-01", "2999-01-01", budget(), client());
     }
+    # Today's bar is final once extended hours and the SIP delay are over.
+    evening = datetime(2026, 10, 8, 20, 15, tzinfo=MARKET_TZ);
+    assert bars_final("2026-10-08", evening) and bars_final("2026-10-07", evening);
+    assert not bars_final("2026-10-08", evening.replace(hour=20, minute=14));
+    assert not bars_final("2026-10-09", evening);
 }
 
 test "a refused request is raised without retrying" {
