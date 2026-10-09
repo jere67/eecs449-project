@@ -507,7 +507,7 @@ Social-media and alternative data sources are stretch goals (Section 16).
 | News and Events | What happened, what is scheduled, and whether news is priced in | Alpaca news (Benzinga), Finnhub company news and earnings calendar, SEC 8-K filings | Per ticker |
 | Macro | Rates, inflation, growth, volatility regime, sector rotation | FRED series such as DGS2, DGS10, VIXCLS, CPIAUCSL, and UNRATE; sector ETF bars from Alpaca | Once per run |
 
-Indicators are computed in code (pandas), never by the LLM: 20/50/200-day moving averages, RSI(14), MACD, Bollinger width, ATR(14), 52-week range position, relative strength against SPY and the sector ETF, and relative volume.
+Indicators are computed in code (`research/indicators.jac`, plain typed functions checked against hand-computed values), never by the LLM: 20/50/200-day moving averages, RSI(14), MACD, Bollinger width, ATR(14), 52-week range position, relative strength against SPY and the sector ETF, relative volume, 20-day realized volatility, and 20- and 60-day momentum.
 
 ### Source inventory
 
