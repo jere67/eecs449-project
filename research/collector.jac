@@ -73,6 +73,18 @@ obj SourceError(Exception) {
 """The run has spent its calls for a source; the collector reports the gap."""
 obj BudgetExceeded(SourceError) {}
 
+"""A key the source needs is not set in the environment."""
+obj MissingKey(SourceError) {}
+
+"""The value of the environment variable `name`, which holds a key for `source`."""
+def env_key(source: str, name: str) -> str {
+    value = os.environ.get(name, "").strip();
+    if not value {
+        raise MissingKey(source=source, url="", detail=f"{name} is not set; see .env.example");
+    }
+    return value;
+}
+
 """A source answered, but not with what the collector expects, such as an error page sent
 with status 200 or a page whose layout changed."""
 obj UnexpectedResponse(SourceError) {}
