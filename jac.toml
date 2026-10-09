@@ -32,7 +32,7 @@ watchdog = ">=3.0.0"
 default = "server"
 
 [byllm.model]
-default_model = "openrouter/qwen/qwen3.8-27b:free"
+default_model = "openrouter/nvidia/nemotron-3-super-120b-a12b:free"
 
 [byllm.call_params]
 temperature = 0.2

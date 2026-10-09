@@ -21,8 +21,8 @@ import from models.agents { Stance, Vote }
 import from tests.fakes.openrouter { FakeOpenRouter }
 
 glob VOTE_JSON: str = '{"stance": "BUY", "confidence": 0.7, "horizon_days": 10, "rationale": "r", "cited_evidence": [0]}';
-glob PROVIDER_PRIMARY: str = "qwen/qwen3.8-27b:free";
-glob PROVIDER_FALLBACK: str = "openrouter/free";
+glob PROVIDER_PRIMARY: str = "nvidia/nemotron-3-super-120b-a12b:free";
+glob PROVIDER_FALLBACK: str = "dots-studio/dots-3-note-preview:free";
 
 glob fake: FakeOpenRouter = FakeOpenRouter();
 glob test_limiter: RequestLimiter = RequestLimiter(per_minute=60000);
@@ -67,14 +67,14 @@ test "a 429 backs off and retries the primary model" {
     assert counted == 2;
 }
 
-test "a primary model that stays rate limited falls back to the Free Models Router" {
+test "a primary model that stays rate limited falls back to the second free model" {
     (vote, sent, counted) = scripted_vote([(429, "")] * 4 + [(200, VOTE_JSON)]);
     assert vote.stance == Stance.BUY;
     assert [r["model"] for r in sent] == [PROVIDER_PRIMARY] * 4 + [PROVIDER_FALLBACK];
     assert counted == 5;
 }
 
-test "a primary model not found falls back to the Free Models Router" {
+test "a primary model not found falls back to the second free model" {
     (vote, sent, counted) = scripted_vote([(404, ""), (200, VOTE_JSON)]);
     assert vote.stance == Stance.BUY;
     assert [r["model"] for r in sent] == [PROVIDER_PRIMARY, PROVIDER_FALLBACK];
