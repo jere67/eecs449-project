@@ -13,8 +13,12 @@ import time;
 import from datetime { datetime, timezone }
 import from jaclang.byllm.lib { AuthenticationError, ByLLMError, ConfigurationError, Model, RateLimitError }
 
-glob PRIMARY_MODEL: str = "openrouter/qwen/qwen3.8-27b:free";
-glob FALLBACK_MODEL: str = "openrouter/openrouter/free";
+# Chosen by spike #12 (docs/spikes/2026-10-08-free-models.md): the only free model with every
+# typed output valid on the first request and no provider errors. The fallback was the
+# runner-up; it is a preview that OpenRouter lists until 2026-12-31. The Free Models Router
+# is not a fallback: it sent a plain prompt to a content-safety classifier.
+glob PRIMARY_MODEL: str = "openrouter/nvidia/nemotron-3-super-120b-a12b:free";
+glob FALLBACK_MODEL: str = "openrouter/dots-studio/dots-3-note-preview:free";
 glob REQUESTS_PER_MINUTE: int = 18;
 glob KILL_SWITCH_ENV: str = "TRADING_AGENT_DISABLE_MODELS";
 
@@ -57,7 +61,7 @@ obj RequestLimiter {
 glob LIMITER: RequestLimiter = RequestLimiter(per_minute=REQUESTS_PER_MINUTE);
 
 """A byLLM model whose every provider request passes the limiter, backs off on 429, and
-falls back to the Free Models Router when the primary model stays rate limited."""
+falls back to a second free model when the primary model stays rate limited or fails."""
 obj LimitedModel(Model) {
     has limiter: RequestLimiter = LIMITER,
         fallback_model: str = FALLBACK_MODEL,
@@ -69,7 +73,8 @@ obj LimitedModel(Model) {
         if models_disabled() {
             raise ModelsDisabledError(f"{KILL_SWITCH_ENV} is set; no model requests are made");
         }
-        # The free model defaults to the highest reasoning effort, which makes every call slow.
+        # Free reasoning models can default to a high effort, which makes every call slow; every
+        # model in spike #12 accepted this setting.
         params["extra_body"] = {
             **params.get("extra_body", {}),
             "reasoning": {"effort": self.reasoning_effort}

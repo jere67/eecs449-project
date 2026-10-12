@@ -26,7 +26,8 @@ jac --version
 Then, from the repo root:
 
 ```bash
-cp .envrc.example .envrc   # fill in keys, then `direnv allow` (or export them yourself)
+cp .env.example .env       # fill in keys
+set -a && source .env && set +a   # export them; jac run does not read .env
 jac install                # Python and npm dependencies
 jac run                    # serves the app with hot reload at http://localhost:8000
 ```

@@ -144,7 +144,7 @@ jac-version = "==0.37.12"
 
 [byllm]
 [byllm.model]
-default_model = "openrouter/qwen/qwen3.8-27b:free"   # OPENROUTER_API_KEY exported in the environment
+default_model = "openrouter/nvidia/nemotron-3-super-120b-a12b:free"   # OPENROUTER_API_KEY exported in the environment
 
 [byllm.call_params]
 temperature = 0.2
@@ -166,8 +166,8 @@ import threading;
 import time;
 import from jaclang.byllm.lib { Model, RateLimitError }
 
-glob PRIMARY: str = "openrouter/qwen/qwen3.8-27b:free";
-glob FALLBACK: str = "openrouter/openrouter/free";   # the Free Models Router, through LiteLLM
+glob PRIMARY: str = "openrouter/nvidia/nemotron-3-super-120b-a12b:free";
+glob FALLBACK: str = "openrouter/dots-studio/dots-3-note-preview:free";   # the runner-up in spike #12
 glob RPM_LIMIT: int = 18;
 glob MAX_429_RETRIES: int = 3;
 
@@ -448,7 +448,7 @@ Tools take ticker lists, so a 20-ticker run fits inside the iteration cap: cover
 | A model call raises any other error | Caught at the call site; the sample is dropped, or the ticker defaults to HOLD, with the error recorded |
 | Fewer than 60% of specialist samples succeed for a ticker | Force HOLD for that ticker |
 | OpenRouter returns 429 (rate limited) | byLLM maps it to `RateLimitError` without retrying ([source](https://github.com/jaseci-labs/jac/blob/v0.37.12/jac/jaclang/byllm/llm.impl/model.impl.jac#L236-L252)), so `LimitedModel` backs off exponentially up to three times, as [OpenRouter's limits page](https://openrouter.ai/docs/api_reference/limits) advises; the reference implementation uses a fixed schedule, and reading `Retry-After` or `X-RateLimit-Reset` from the response is a planned refinement |
-| The free model stays rate limited, is unavailable, or leaves the free list | `LimitedModel` sends the request to OpenRouter's [Free Models Router](https://openrouter.ai/docs/guides/routing/routers/free-router) (`openrouter/openrouter/free` through LiteLLM), which picks a free model at random, so output quality varies; the app alerts the team |
+| The free model stays rate limited, is unavailable, or leaves the free list | `LimitedModel` sends the request to the fallback free model, the runner-up in spike #12; the app alerts the team |
 | The daily free-model cap is nearly used up | Run in reduced mode (K = 1, shortlist of 10); existing stop orders stay in force |
 | Alpaca rejects an order | Log the rejection, surface it on the dashboard, and do not retry automatically |
 | Market holiday or early close | Preflight checks [Alpaca's market calendar](https://docs.alpaca.markets/us/reference/legacycalendar), which includes early closures, and skips the run or shifts the jobs: on a 1:00 p.m. close, such as [Nov 27, 2026](https://www.nyse.com/markets/hours-calendars), the 3:50 p.m. cancel moves to 12:50 p.m. and the 4:30 p.m. job to 1:30 p.m. |
@@ -473,7 +473,7 @@ This keeps LLM cost proportional to the shortlist rather than the index and make
 3. **Pull daily bars.** Fetch one year of daily bars for all constituents through Alpaca's [multi-symbol bars endpoint](https://docs.alpaca.markets/us/reference/stockbars) (a few dozen requests, well inside the free plan's [200 requests per minute](https://docs.alpaca.markets/us/docs/about-market-data-api)).
 4. **Filter for liquidity.** Drop names below $50 million of 20-day average dollar volume (proposed).
 5. **Score attention and setup.** Compute the composite score below from price, volume, news, and event features.
-6. **Diversify.** Take the top 15 by score with at most three per GICS sector.
+6. **Diversify.** Take the top 15 by score with at most three per GICS sector and one share class per company (GOOG or GOOGL, never both), since two classes are one company's risk.
 7. **Add mandatory names.** Append every open position, so exits are always evaluated.
 8. **Allow wildcards.** The Orchestrator may add up to three tickers from the macro brief or breaking news, with a logged reason.
 
@@ -486,6 +486,8 @@ $$
 
 Here mom is total return over 20 and 60 trading days, rvol is 5-day volume relative to its 60-day average, news is the 3-day article count from Alpaca's news feed, the indicator flags an earnings date within 5 trading days, vol is 20-day realized volatility, and z is the cross-sectional z-score.
 Starting weights are equal (w = 1); the evaluation harness tunes them on history before launch, and they are frozen during the live test.
+On the first live screen (October 8, 2026), unbounded z-scores let single outliers dominate: one name's news term was 10.8 and another's relative-volume term 10.1, so the earnings flag (worth 1) never changed a pick; the harness should compare clipping z at ±3, or log-scaling news counts and relative volume, when it tunes the weights.
+The screen lives in `research/screener.jac`, versioned by `SCREEN_VERSION`.
 
 ### Why a quant screen first
 
@@ -507,7 +509,7 @@ Social-media and alternative data sources are stretch goals (Section 16).
 | News and Events | What happened, what is scheduled, and whether news is priced in | Alpaca news (Benzinga), Finnhub company news and earnings calendar, SEC 8-K filings | Per ticker |
 | Macro | Rates, inflation, growth, volatility regime, sector rotation | FRED series such as DGS2, DGS10, VIXCLS, CPIAUCSL, and UNRATE; sector ETF bars from Alpaca | Once per run |
 
-Indicators are computed in code (pandas), never by the LLM: 20/50/200-day moving averages, RSI(14), MACD, Bollinger width, ATR(14), 52-week range position, relative strength against SPY and the sector ETF, and relative volume.
+Indicators are computed in code (`research/indicators.jac`, plain typed functions checked against hand-computed values), never by the LLM: 20/50/200-day moving averages, RSI(14), MACD, Bollinger width, ATR(14), 52-week range position, relative strength against SPY and the sector ETF, relative volume, 20-day realized volatility, and 20- and 60-day momentum.
 
 ### Source inventory
 
@@ -533,6 +535,11 @@ Earnings call transcripts are excluded because no reliable free source exists; c
 - **Normalize and stamp.** Every datum carries its source URL, publish time, and fetch time before it reaches an agent.
 - **Respect licenses.** Several free tiers are personal or non-commercial.
   The public dashboard shows derived analysis and links to sources, not redistributed raw data.
+
+The shared machinery is `SourceClient` in `research/collector.jac`, and the per-source limits, run budgets, cache lifetimes, and freshness limits are versioned in `research/sources.jac`.
+Collectors call each provider's REST API through it rather than an SDK such as alpaca-py, whose own HTTP calls would bypass the cache, rate limits, run budget, and recorded fixtures.
+None of the current sources has a daily cap, only per-minute limits, so each run budget is a guard against runaway loops; the 50% rule is enforced for any source that declares a daily limit.
+Freshness is measured from each datum's publish time, and the limits there are proposals until the Research exit run (#27) checks them against each provider's update cadence (GAP-15).
 
 ### Actions to start this week
 
@@ -812,24 +819,30 @@ Sources: [deploy guide](https://github.com/jaseci-labs/jac/blob/v0.37.12/jac/jac
 
 ## 12. LLM configuration and request budget
 
-Every agent runs on one free model, Qwen3.8 27B (`qwen/qwen3.8-27b:free`), which byLLM reaches through OpenRouter, so the system pays nothing per token.
+Every agent runs on one free model, NVIDIA Nemotron 3 Super (`nvidia/nemotron-3-super-120b-a12b:free`), which byLLM reaches through OpenRouter, so the system pays nothing per token.
 The binding constraint is OpenRouter's free-model rate limit, which covers the whole account: 20 requests per minute, and 1,000 requests per day once the account has bought at least $10 of credits, or 50 per day otherwise ([OpenRouter limits](https://openrouter.ai/docs/api_reference/limits)).
+The team account has the 1,000-a-day allowance, and its key's credit limit is $0, so a paid model is refused rather than billed.
 Additional keys or accounts do not raise the limit, because OpenRouter governs capacity globally.
 A standard run uses about 460 requests, including retries, which leaves room for on-demand reports.
 
 ### Model choice
 
-Among the 17 free model variants OpenRouter listed on October 3, 2026, Qwen3.8 27B has the highest Artificial Analysis intelligence index (33.7) and agentic index (45.8) reported in OpenRouter's [models API](https://openrouter.ai/api/v1/models); the next free model scores 25.7.
-Its [endpoint listing](https://openrouter.ai/api/v1/models/qwen/qwen3.8-27b:free/endpoints) gives a 262,144-token context and support for `tools` and `tool_choice`, which the Orchestrator's ReAct loop needs ([model page](https://openrouter.ai/qwen/qwen3.8-27b:free)).
-Three details from that listing shape the design:
-- **Reasoning is on by default at the highest effort.** Every request would be slow and long, so `LimitedModel` sets the reasoning effort to low (Section 3).
-- **One provider serves the free variant.** If that provider goes down, so does the model, which is why the fallback below exists.
-- **`tool_choice: "none"` is not supported.** The Orchestrator never sends it.
+The design first chose Qwen3.8 27B, the free model with the highest benchmark scores on October 3, 2026, but by October 8 its free variant had left OpenRouter's list.
+Spike #12 then ran the same research reports, votes, and Orchestrator tool loop on the four strongest free models that answered ([findings](spikes/2026-10-08-free-models.md)):
+- **Nemotron 3 Super** returned all 12 typed objects valid on the first request, with no provider errors, and ran the batched tool loop in two requests; its median request took 10 seconds and its slowest 153.
+- **dots.3 Note preview** returned all 12 but needed a parse retry on 5, and OpenRouter lists it only until December 31, 2026; it is the fallback.
+- **Nemotron 3 Ultra** scores higher on benchmarks but failed 3 of 12 calls on "service temporarily overloaded", and **apodex 1.1 mini** refuses byLLM's JSON-schema output format.
 
-OpenRouter's free list changes without notice, so the model is one config value.
-If the primary model stays rate limited, fails, or leaves the free list, `LimitedModel` falls back to OpenRouter's [Free Models Router](https://openrouter.ai/docs/guides/routing/routers/free-router), which picks a free model that supports tool calling and structured outputs at random.
-Through LiteLLM, whose OpenRouter strings take the form `openrouter/<provider>/<model>` ([LiteLLM](https://docs.litellm.ai/docs/providers/openrouter)), the router is `openrouter/openrouter/free`; the shorter `openrouter/free` resolves to a model named `free`, which does not exist.
-The team re-checks the free list before Pitch Week and Launch Week.
+Three findings from the spike shape the design:
+- **Free-priced is not free.** A $0-priced model without a `:free` variant is refused by a key with a $0 credit limit, and some `:free` models answer only registered apps, so a candidate counts only after a real typed call succeeds.
+- **The Free Models Router is not a fallback.** Given a plain prompt, it chose a content-safety classifier, so a router fallback can fail silently; the fallback is a named second model instead.
+- **A loop's final summary ignores the task's limits.** After `ABORT_WITH_SUMMARY`, every model listed 9 to 12 follow-ups when told at most two, so the Orchestrator clamps every count in code.
+
+`LimitedModel` asks for low reasoning effort, which every candidate accepted.
+OpenRouter's free list changes without notice, so each model is one config value.
+If the primary model stays rate limited, fails, or leaves the free list, `LimitedModel` falls back to the second model.
+Through LiteLLM, OpenRouter model strings take the form `openrouter/<provider>/<model>` ([LiteLLM](https://docs.litellm.ai/docs/providers/openrouter)).
+The team re-checks the free list before Pitch Week and Launch Week, and reruns the spike (`tests/spikes/model_spike.jac`) on any change.
 The model configuration lives in the `jac.toml` and `agents/models.jac` shown in Section 3.
 
 | Role | Model instance | Temperature | Notes |
@@ -1049,7 +1062,7 @@ Each has a mitigation, and a cut line defines what to drop first if the team fal
 | Risk | Likelihood | Impact | Mitigation |
 | --- | --- | --- | --- |
 | Jac or byLLM behavior differs from the docs, or a release breaks the build | Medium | High | Pin Jac 0.37.12; treat the version-pinned bundled docs as authoritative over the website, which still describes 0.34; follow the implementation rules in Section 3; spike the Orchestrator's tool loop on the free model in week 1 |
-| The free model leaves OpenRouter's free list, is congested at peak hours, or loses its single provider | High | High | The model is one config value; fallback to the Free Models Router; shared limiter and retries |
+| The free model leaves OpenRouter's free list, is congested at peak hours, or loses its single provider | High (it happened to Qwen3.8 27B within a week) | High | The model is one config value; a named fallback model; shared limiter and retries; rerun spike #12 on any change |
 | The free model is too weak for reliable typed outputs or tool use | Medium | High | Small, focused prompts; typed returns with one retry; measure the validation failure rate in week 2 and switch models if it exceeds 5% |
 | The daily free-model cap is reached | Medium | Medium | Preflight budget check, reduced mode, cache-only reports (Section 12) |
 | The Orchestrator loops, stalls, or skips tickers | Medium | Medium | Iteration cap, coverage checks, deterministic fallback |
@@ -1107,7 +1120,7 @@ Every external claim in this document links its source where it is made; this li
 ### Model provider
 
 - [Limits](https://openrouter.ai/docs/api_reference/limits), [free variants](https://openrouter.ai/docs/guides/routing/model-variants/free), [Free Models Router](https://openrouter.ai/docs/guides/routing/routers/free-router), and [provider logging](https://openrouter.ai/docs/guides/privacy/provider-logging), OpenRouter
-- [Qwen3.8 27B (free)](https://openrouter.ai/qwen/qwen3.8-27b:free), its [endpoint listing](https://openrouter.ai/api/v1/models/qwen/qwen3.8-27b:free/endpoints), and the [models API](https://openrouter.ai/api/v1/models), OpenRouter
+- [Nemotron 3 Super (free)](https://openrouter.ai/nvidia/nemotron-3-super-120b-a12b:free), [dots.3 Note preview (free)](https://openrouter.ai/dots-studio/dots-3-note-preview:free), and the [models API](https://openrouter.ai/api/v1/models), OpenRouter
 - [OpenRouter provider](https://docs.litellm.ai/docs/providers/openrouter) and [routing](https://docs.litellm.ai/docs/routing), LiteLLM
 
 ### Broker

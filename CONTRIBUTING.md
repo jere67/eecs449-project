@@ -51,6 +51,10 @@ jac run --dev    # serve the app locally when your change touches it
 Tests never call a real model, broker, or data provider.
 Use `MockLLM` for agents and recorded fixtures for collectors, so CI stays free and deterministic.
 
+To record collector fixtures, export the source's API key and `COLLECTOR_RECORD_DIR=/some/dir`, then run the collector once.
+Each live response is saved as `<dir>/<source>/<dataset>-<hash>.json`, with API keys sent as query parameters left out.
+Trim large bodies to what the test needs, commit the files under `tests/fixtures/<source>/`, and replay them with `FakeSource` from `tests/fakes/source_server.jac`, pointing the source's base-URL variable (such as `FINNHUB_BASE_URL`) at it.
+
 ## Writing Jac
 
 We pin Jac 0.37.12, and much of the Jac website still describes 0.34.
@@ -68,11 +72,16 @@ The ones that bite most often:
 - Call models through a role instance in `agents/models.jac` (`by research_llm(...)`), never the builtin `llm`, which skips the rate limiter.
   A test fails if any module uses the builtin.
   Add a new instance for a new role rather than sharing one, since call params leak between concurrent calls on one instance.
+- Fetch data through `SourceClient` in `research/collector.jac`, never with a bare HTTP call, so every request is cached, rate limited, retried, and counted against the run's budget.
+  Limits, budgets, cache lifetimes, and freshness limits live in `research/sources.jac`; bump `SOURCES_VERSION` when you change them.
+  Collectors return values and never touch the graph; a test fails if a module in `research/` does.
 
 ## Secrets
 
 Never commit keys, tokens, or account IDs.
-`jac run` does not read `.env`, so export variables in your shell (direnv works well).
+Copy `.env.example` to `.env` and fill in your keys; `.env` is gitignored.
+`jac run` and `jac test` do not read `.env`, so export it into your shell with `set -a && source .env && set +a`.
+With direnv, `echo dotenv > .envrc && direnv allow` does that whenever you enter the repo.
 Share keys through a password manager, not in chat.
 
 ## Docs
