@@ -2,14 +2,17 @@
 
 Requests are answered from a script of (status, content) pairs in order and recorded, so a
 test can count exactly how many requests reached the provider. A request beyond the script
-gets a 500, which makes an unexpected extra request fail loudly.
+gets a 500, which makes an unexpected extra request fail loudly. `delays` holds seconds to
+wait before answering each request in order, to make a request time out.
 """
 import json;
 import threading;
+import time;
 import from http.server { BaseHTTPRequestHandler, ThreadingHTTPServer }
 
 obj FakeOpenRouter {
     has script: list[tuple[int, str]] = [],
+        delays: list[float] = [],
         requests: list[dict] = [];
     has _server: ThreadingHTTPServer | None = None,
         _lock: threading.Lock | None = None;
@@ -31,11 +34,14 @@ obj FakeOpenRouter {
         }
     }
 
-    """Record a request and return the scripted (status, content) for it."""
+    """Record a request and return the scripted (status, content) for it, after its delay."""
     def answer(body: dict[str, object]) -> tuple[int, str] {
         with self._lock {
             index = len(self.requests);
             self.requests.append(body);
+        }
+        if index < len(self.delays) {
+            time.sleep(self.delays[index]);
         }
         if index < len(self.script) {
             return self.script[index];
@@ -76,8 +82,12 @@ class _Handler(BaseHTTPRequestHandler) {
         self.send_response(status);
         self.send_header("Content-Type", "application/json");
         self.send_header("Content-Length", str(len(data)));
-        self.end_headers();
-        self.wfile.write(data);
+        try {
+            self.end_headers();
+            self.wfile.write(data);
+        } except (BrokenPipeError, ConnectionResetError) {
+            # The client gave up on a delayed answer.
+        }
     }
 
     def log_message(self: _Handler, _fmt: str, *_args: object) {}
