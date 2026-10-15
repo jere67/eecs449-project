@@ -505,7 +505,7 @@ Social-media and alternative data sources are stretch goals (Section 16).
 | Sub-agent | Scope | Main inputs | Runs |
 | --- | --- | --- | --- |
 | Market and Technical | Trend, momentum, volatility, volume, relative strength | Alpaca daily bars; indicators computed in code | Per ticker |
-| Fundamentals and Filings | Growth, margins, balance sheet, valuation, guidance, insider and institutional activity | SEC XBRL company facts, 10-K/10-Q/8-K text, Form 4, 13F; Finnhub key metrics, recommendation trends, EPS surprises | Per ticker |
+| Fundamentals and Filings | Growth, margins, balance sheet, valuation, guidance, insider and institutional activity | SEC XBRL company facts, 10-K/10-Q/8-K text, Form 4; Finnhub key metrics, recommendation trends, EPS surprises | Per ticker |
 | News and Events | What happened, what is scheduled, and whether news is priced in | Alpaca news (Benzinga), Finnhub company news and earnings calendar, SEC 8-K filings | Per ticker |
 | Macro | Rates, inflation, growth, volatility regime, sector rotation | FRED series such as DGS2, DGS10, VIXCLS, CPIAUCSL, and UNRATE; sector ETF bars from Alpaca | Once per run |
 
@@ -518,7 +518,7 @@ Indicators are computed in code (`research/indicators.jac`, plain typed function
 | [Alpaca Market Data, Basic](https://docs.alpaca.markets/us/docs/about-market-data-api) | Stock and ETF bars since 2016; real-time IEX quotes | REST + WebSocket, API key | Free; 200 historical calls/min; 30 WebSocket symbols; latest 15 minutes of consolidated data restricted | Screener, Market, Macro | Daily decisions use prior-day bars, so the 15-minute restriction does not matter |
 | [Alpaca News](https://docs.alpaca.markets/us/docs/historical-news-data) | Benzinga news since 2015, 130+ articles a day | REST + [WebSocket](https://docs.alpaca.markets/us/docs/streaming-real-time-news) | Same free key | News, Screener | Primary news source |
 | Alpaca Trading API ([assets](https://docs.alpaca.markets/us/reference/get-v2-assets-1), [calendar](https://docs.alpaca.markets/us/reference/legacycalendar)) | Tradable symbols; market days and hours, including early closures | REST, API key | Free | Screener, Run Guard | Tradability checks and holiday detection |
-| SEC EDGAR ([APIs](https://www.sec.gov/search-filings/edgar-application-programming-interfaces), [fair access](https://www.sec.gov/os/accessing-edgar-data)) | Filing index, XBRL company facts, filing text, Form 4, 13F, 8-K | REST (`data.sec.gov`), no key | 10 requests/second with a declared User-Agent | Fundamentals, News | User-Agent with a team contact email is required |
+| SEC EDGAR ([APIs](https://www.sec.gov/search-filings/edgar-application-programming-interfaces), [fair access](https://www.sec.gov/os/accessing-edgar-data)) | Filing index, XBRL company facts, filing text, Form 4, 8-K | REST (`data.sec.gov`), no key | 10 requests/second with a declared User-Agent | Fundamentals, News | User-Agent with a team contact email is required |
 | [Finnhub, free](https://finnhub.io/pricing) | Company news (1 year), earnings calendar (1 month), recommendation trends, EPS surprises (4 quarters), key metrics | REST, API key | 60 calls/min; U.S. only; personal-use license | Fundamentals, News | Show derived results, not raw data |
 | [FRED](https://fred.stlouisfed.org/docs/api/api_key.html) | Treasury yields, VIX close, fed funds, CPI, unemployment, and other series | REST, [free API key](https://fredhelp.stlouisfed.org/fred/account/fred-account-features/register/) | Free | Macro | The St. Louis Fed's database of Fed, BLS, and other series; VIX (CBOE) is copyrighted, so pages show only derived values, and the app shows FRED's required attribution ([terms](https://fred.stlouisfed.org/docs/api/terms_of_use.html)) |
 | S&P 500 constituents | Current members, GICS sectors, and dated index changes | Wikipedia [list](https://en.wikipedia.org/wiki/List_of_S%26P_500_companies) and [historical components](https://en.wikipedia.org/wiki/Historical_components_of_the_S%26P_500) | Free | Screener, historical harness | Weekly refresh |
@@ -567,9 +567,10 @@ Votes flow one way into code; only an ambiguous result loops back for more sampl
 | Technical | Trend, momentum, support and resistance, volatility, relative strength | Market and Technical |
 | News and Events | Materiality of news, whether it is priced in, upcoming catalysts such as earnings | News and Events |
 | Macro and Sector | Rate and inflation regime, sector rotation, sensitivity to scheduled releases | Macro; sector ETF data |
-| Flow and Positioning | Insider buying and selling, changes in institutional holdings | Fundamentals and Filings (Form 4, 13F) |
+| Flow and Positioning | Insider buying and selling; changes in institutional holdings once 13F data lands (#52) | Fundamentals and Filings (Form 4) |
 
 Flow data has different delays: Form 4 arrives within [two business days](https://www.sec.gov/files/forms-3-4-5.pdf) of an insider trade, while 13F holdings are quarterly and filed up to [45 days after quarter end](https://www.sec.gov/rules-regulations/staff-guidance/division-investment-management-frequently-asked-questions/frequently-asked-questions-about-form-13f), so the Flow specialist treats institutional data as weeks to months old.
+EDGAR has no per-issuer 13F endpoint: holdings sit in each manager's own filing, so a per-stock view needs SEC's quarterly [13F data sets](https://www.sec.gov/data-research/sec-markets-data/form-13f-data-sets) joined to tickers, which is a stretch goal (#52); until then the Flow specialist reads Form 4 only.
 
 A Critic role that writes the strongest opposing case for the Arbiter is a stretch goal (Section 16).
 
@@ -1048,6 +1049,7 @@ Prediction markets need their own evaluation metric, the Brier score of the agen
 | Second free model for sampling | Alternate specialist samples across two free models to decorrelate errors | Depends on OpenRouter's free list at the time |
 | Single-agent baseline | A second paper portfolio run by one agent with the same tools | Roughly doubles daily model requests |
 | Options and short-sale signals | Put/call and implied-volatility proxies from Alpaca's free [indicative options feed](https://docs.alpaca.markets/us/docs/historical-option-data), a 15-minute-delayed derivative of OPRA; [FINRA daily short-sale volume](https://www.finra.org/finra-data/browse-catalog/short-sale-volume-data/daily-short-sale-volume-files) | Short-sale volume is not short interest and covers only off-exchange (TRF, ADF, ORF) trades ([FINRA](https://www.finra.org/rules-guidance/notices/information-notice-051019)) |
+| Institutional holdings (#52) | Quarterly changes in institutional ownership for the Flow specialist | EDGAR has no per-issuer 13F endpoint; built from SEC's quarterly [13F data sets](https://www.sec.gov/data-research/sec-markets-data/form-13f-data-sets), which identify securities by CUSIP, not ticker |
 | Congressional trade disclosures | House and Senate periodic transaction reports | Scraping required; check the filing lag before relying on it |
 | Live committee page | Real-time run progress through polling or a streaming (SSE) endpoint | Dashboard polish |
 | Backup data providers | FMP (250 calls a day; [FAQ](https://site.financialmodelingprep.com/faqs)) and Twelve Data (800 calls a day, 8 a minute, non-commercial use; [pricing](https://twelvedata.com/pricing)) | Only if a core source proves unreliable |
