@@ -81,8 +81,10 @@ obj SpikeModel(LimitedModel) {
 }
 
 # The shared limiter paces every request; this one only stands in for LimitedModel's own.
+# The 0.37.12 checker sometimes loses Model's constructor on this subclass of a subclass,
+# depending on how it batches modules, and reports E1052 for model_name.
 glob spike_llm: SpikeModel = SpikeModel(
-    model_name="openrouter/" + CANDIDATES[0],
+    model_name="openrouter/" + CANDIDATES[0],  # jac:ignore[E1052]
     limiter=RequestLimiter(per_minute=60000),
     max_429_retries=2,
     backoff_s=5.0
