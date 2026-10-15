@@ -2,13 +2,13 @@
 each shortlisted ticker's data in parallel, run the Market, Fundamentals, and News
 sub-agents on every ticker and the Macro sub-agent once, and record the results.
 
-Collectors and sub-agents run inside `flow`, whose worker threads lose the request's graph
-context, so `research_pass` only returns values; `record_pass` writes them to the graph
-afterwards, on the caller's thread (TDD §3, rules 5 and 6). A failed source becomes a gap,
+Collectors and sub-agents run on worker threads, which lose the request's graph context, so
+`research_pass` only returns values; `record_pass` writes them to the graph afterwards, on
+the caller's thread (TDD §3, rule 6). A failed source becomes a gap,
 and a failed sub-agent a safe default, so one bad ticker or provider never stops the pass.
 """
 import time;
-import from concurrent.futures { Future }
+import from concurrent.futures { Future, ThreadPoolExecutor }
 import from datetime { date, datetime, timedelta }
 import from agents.models { FALLBACK_MODEL, LIMITER, PRIMARY_MODEL }
 import from agents.research { MacroResult, ResearchResult, macro_research, research }
@@ -57,6 +57,14 @@ import from research.wikipedia { Constituent, constituents }
 import from run.public { public }
 
 glob BENCHMARK: str = "SPY";
+
+# Collectors and sub-agents wait on the network, not the CPU. `flow`'s pool has cpu + 4
+# threads, which held the first exit run to about 3.5 model requests a minute against the
+# limiter's 18 (docs/runs/2026-10-15-research-exit-run.md) and would hold a 2-vCPU server to
+# half that, so the pass has its own pool, sized to keep the limiter busy while slow
+# requests run. The limiter and each source's token bucket still set the pace.
+glob NETWORK_WORKERS: int = 32;
+glob NETWORK: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=NETWORK_WORKERS, thread_name_prefix="research");
 
 glob COVERAGE_REASONS: dict[PickReason, CoverageReason] = {
     PickReason.SCORE: CoverageReason.SCREEN,
@@ -189,8 +197,8 @@ def research_pass(run_day: str, open_positions: list[str], config: PassConfig = 
     (releases, calendar_gaps) = next_releases(ctx);
     gaps.extend(calendar_gaps);
     ciks = company_ciks(symbols, members, budget, gaps);
-    pending = [start_collect(p, releases.get(p.symbol), ciks.get(p.symbol, ""), ctx) for p in shortlist.picks];
-    collected = [(wait f) as TickerInputs for f in pending];
+    pending = [NETWORK.submit(collect_ticker, p, releases.get(p.symbol), ciks.get(p.symbol, ""), ctx) for p in shortlist.picks];
+    collected = [f.result() for f in pending];
     phases["collect"] = time.monotonic() - clock;
 
     clock = time.monotonic();
@@ -221,20 +229,21 @@ def research_pass(run_day: str, open_positions: list[str], config: PassConfig = 
 """Run the three research sub-agents on every collected ticker and the Macro sub-agent
 once, all at the same time; the shared limiter paces their requests."""
 def write_reports(run_day: str, collected: list[TickerInputs], macro_inputs: MacroInputs) -> tuple[list[TickerResearch], MacroResult] {
-    pending_macro = start_macro(macro_brief(run_day, macro_inputs));
+    pending_macro = NETWORK.submit(macro_research, macro_brief(run_day, macro_inputs));
     running: list[list[Future[ResearchResult]]] = [];
     for c in collected {
-        running.append([
-            start_research(market_brief(c.pick.symbol, run_day, c.market)),
-            start_research(fundamentals_brief(c.pick.symbol, run_day, c.fundamentals)),
-            start_research(news_brief(c.pick.symbol, run_day, c.news))
-        ]);
+        briefs = [
+            market_brief(c.pick.symbol, run_day, c.market),
+            fundamentals_brief(c.pick.symbol, run_day, c.fundamentals),
+            news_brief(c.pick.symbol, run_day, c.news)
+        ];
+        running.append([NETWORK.submit(research, b) for b in briefs]);
     }
     per_ticker = [
-        TickerResearch(pick=c.pick, reports=[(wait f) as ResearchResult for f in futures], fetch_errors=c.fetch_errors)
+        TickerResearch(pick=c.pick, reports=[f.result() for f in futures], fetch_errors=c.fetch_errors)
         for (c, futures) in zip(collected, running)
     ];
-    return (per_ticker, (wait pending_macro) as MacroResult);
+    return (per_ticker, pending_macro.result());
 }
 
 """Runs source calls for one ticker, turning each failure into a gap for the brief that
@@ -368,7 +377,7 @@ def company_ciks(symbols: list[str], members: list[Constituent], budget: RunBudg
 
 """Write a finished pass under `portfolio`: one Run, a Coverage per ticker with its three
 ResearchRecords, and the MacroRecord, each granted READ. Call it after the pass, on the
-caller's thread, never inside `flow`."""
+caller's thread, never on a worker thread."""
 def record_pass(portfolio: Portfolio, result: ResearchPass) -> Run {
     run = public(portfolio +>:Ran():+> Run(
         run_date=result.run_day,
@@ -394,20 +403,4 @@ def record_pass(portfolio: Portfolio, result: ResearchPass) -> Run {
         }
     }
     return run;
-}
-
-# `flow` runs its call on a worker thread, so each launch goes through a helper whose
-# parameters pin the values (TDD §3, rule 5). Only `imm` values may cross into `flow`
-# (E1308): every payload is read-only while the task runs, except the run budget, which
-# is shared on purpose and takes its own lock (`RunBudget.spend`).
-def start_collect(pick: imm Pick, release: imm EarningsDate | None, cik: str, ctx: imm PassContext) -> Future[TickerInputs] {
-    return (flow collect_ticker(pick, release, cik, ctx)) as Future[TickerInputs];
-}
-
-def start_research(brief: imm Brief) -> Future[ResearchResult] {
-    return (flow research(brief)) as Future[ResearchResult];
-}
-
-def start_macro(brief: imm Brief) -> Future[MacroResult] {
-    return (flow macro_research(brief)) as Future[MacroResult];
 }
