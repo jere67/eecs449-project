@@ -11,7 +11,7 @@ import os;
 import threading;
 import time;
 import from datetime { datetime, timezone }
-import from jaclang.byllm.lib { AuthenticationError, ByLLMError, ConfigurationError, Model, RateLimitError }
+import from jaclang.byllm.lib { AuthenticationError, ConfigurationError, Model, RateLimitError }
 
 # Chosen by spike #12 (docs/spikes/2026-10-08-free-models.md): the only free model with every
 # typed output valid on the first request and no provider errors. The fallback was the
@@ -20,6 +20,8 @@ import from jaclang.byllm.lib { AuthenticationError, ByLLMError, ConfigurationEr
 glob PRIMARY_MODEL: str = "openrouter/nvidia/nemotron-3-super-120b-a12b:free";
 glob FALLBACK_MODEL: str = "openrouter/dots-studio/dots-3-note-preview:free";
 glob REQUESTS_PER_MINUTE: int = 18;
+# Spike #12's slowest successful request took 153 s; LiteLLM's default would wait 600 s.
+glob REQUEST_TIMEOUT_S: float = 180.0;
 glob KILL_SWITCH_ENV: str = "TRADING_AGENT_DISABLE_MODELS";
 
 """Raised instead of a provider request while the kill switch is on."""
@@ -29,10 +31,12 @@ def models_disabled -> bool {
     return os.environ.get(KILL_SWITCH_ENV, "").strip().lower() in ("1", "true", "yes");
 }
 
-"""Paces requests evenly to at most `per_minute`, across every thread, and counts them per UTC day."""
+"""Paces requests evenly to at most `per_minute`, across every thread, and counts them per UTC
+day, along with how many went to the fallback model."""
 obj RequestLimiter {
     has per_minute: int;
     has sent: int = 0,
+        fallbacks: int = 0,
         sent_by_day: dict[str, int] = {};
     has _lock: threading.Lock | None = None,
         _next_slot: float = 0.0;
@@ -56,17 +60,29 @@ obj RequestLimiter {
             self.sent_by_day[day] = self.sent_by_day.get(day, 0) + 1;
         }
     }
+
+    def note_fallback {
+        with self._lock {
+            self.fallbacks += 1;
+        }
+    }
 }
 
 glob LIMITER: RequestLimiter = RequestLimiter(per_minute=REQUESTS_PER_MINUTE);
 
-"""A byLLM model whose every provider request passes the limiter, backs off on 429, and
-falls back to a second free model when the primary model stays rate limited or fails."""
+"""A byLLM model whose every provider request passes the limiter, backs off on 429, times
+out, and falls back to a second free model when the primary model stays rate limited, is
+down, hangs, or has left the free list.
+
+byLLM maps only 401, 429, and 404 to ByLLMError; a 5xx, an overloaded provider, a dropped
+connection, or a timeout arrives as LiteLLM's own exception, so every error but an
+authentication or configuration one falls back (#53)."""
 obj LimitedModel(Model) {
     has limiter: RequestLimiter = LIMITER,
         fallback_model: str = FALLBACK_MODEL,
         max_429_retries: int = 3,
         backoff_s: float = 2.0,
+        request_timeout_s: float = REQUEST_TIMEOUT_S,
         reasoning_effort: str = "low";
 
     override def model_call_no_stream(params: dict[str, object]) -> dict[str, object] {
@@ -79,6 +95,7 @@ obj LimitedModel(Model) {
             **params.get("extra_body", {}),
             "reasoning": {"effort": self.reasoning_effort}
         };
+        params["timeout"] = self.request_timeout_s;
         for attempt in range(self.max_429_retries + 1) {
             self.limiter.acquire();
             try {
@@ -91,11 +108,12 @@ obj LimitedModel(Model) {
                 if attempt < self.max_429_retries {
                     time.sleep(self.backoff_s * (2 ** attempt));
                 }
-            } except ByLLMError {
+            } except Exception {
                 break;
             }
         }
         params["model"] = self.fallback_model;
+        self.limiter.note_fallback();
         self.limiter.acquire();
         return super.model_call_no_stream(params);
     }
