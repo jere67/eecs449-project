@@ -509,6 +509,10 @@ Social-media and alternative data sources are stretch goals (Section 16).
 | News and Events | What happened, what is scheduled, and whether news is priced in | Alpaca news (Benzinga), Finnhub company news and earnings calendar, SEC 8-K filings | Per ticker |
 | Macro | Rates, inflation, growth, volatility regime, sector rotation | FRED series such as DGS2, DGS10, VIXCLS, CPIAUCSL, and UNRATE; sector ETF bars from Alpaca | Once per run |
 
+Each sub-agent reads a brief built in code (`research/briefs.jac`): numbered sources, each with the exact URL and publish time to cite, figures already in words, and article and filing text capped inside untrusted-data blocks, about 6,000 tokens in all.
+After the call, code checks every evidence item against the brief: a claim citing any other URL is removed and counted, and `published` is taken from the brief rather than the model (`agents/research.jac`).
+A report counts as complete when the call succeeded and at least one claim survived that check; a failed call is a HOLD at confidence 0 with the error in `data_gaps`.
+
 Indicators are computed in code (`research/indicators.jac`, plain typed functions checked against hand-computed values), never by the LLM: 20/50/200-day moving averages, RSI(14), MACD, Bollinger width, ATR(14), 52-week range position, relative strength against SPY and the sector ETF, relative volume, 20-day realized volatility, and 20- and 60-day momentum.
 
 ### Source inventory
