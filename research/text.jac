@@ -15,8 +15,8 @@ glob _OPEN: str = "<untrusted-data";
 glob _CLOSE: str = "</untrusted-data>";
 glob _DELIMITER: re.Pattern[str] = re.compile(r"<\s*/?\s*untrusted-data", re.IGNORECASE);
 
-"""The readable text of an HTML fragment: tags dropped, entities decoded, scripts and
-styles removed, and one line per block element."""
+"""The readable text of an HTML fragment: tags dropped, entities decoded, scripts, styles,
+and the page title removed, and one line per block element."""
 def html_to_text(html: str) -> str {
     parser = _TextParser();
     parser.feed(html);
@@ -52,6 +52,9 @@ def _attribute(value: str) -> str {
     return " ".join(_DELIMITER.sub("", value).replace('"', "'").replace(">", " ").split());
 }
 
+# Elements whose text is never part of what a reader sees on the page.
+glob _HIDDEN: set[str] = {"script", "style", "title"};
+
 glob _BLOCKS: set[str] = {
     "p", "div", "br", "li", "ul", "ol", "tr", "table", "h1", "h2", "h3", "h4", "h5", "h6",
     "blockquote", "pre", "section", "article", "header", "footer"
@@ -65,7 +68,7 @@ class _TextParser(HTMLParser) {
     }
 
     override def handle_starttag(self: _TextParser, tag: str, _attrs: list[tuple[str, str | None]]) {
-        if tag in ("script", "style") {
+        if tag in _HIDDEN {
             self._hidden += 1;
         } elif tag in _BLOCKS {
             self.parts.append("\n");
@@ -75,7 +78,7 @@ class _TextParser(HTMLParser) {
     }
 
     override def handle_endtag(self: _TextParser, tag: str) {
-        if tag in ("script", "style") {
+        if tag in _HIDDEN {
             self._hidden = max(0, self._hidden - 1);
         } elif tag in _BLOCKS {
             self.parts.append("\n");
