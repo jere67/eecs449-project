@@ -9,7 +9,7 @@ Every base URL can be overridden through its environment variable, which is how 
 replay recorded fixtures from a local server instead of calling the provider.
 """
 
-glob SOURCES_VERSION: str = "2026-10-08.2";
+glob SOURCES_VERSION: str = "2026-10-15.1";
 
 glob HOUR: float = 1.0;
 glob DAY: float = 24.0;
@@ -98,13 +98,12 @@ glob SOURCES: dict[str, Source] = {
             burst=5,
             run_budget=150
         ),
-        # 120 a minute per key is reported by client libraries, not by FRED's own docs,
-        # so pace at half that until a live run confirms it.
+        # 120 a minute before a 429 (https://fred.stlouisfed.org/docs/api/fred/errors.html).
         Source(
             name="fred",
             base_url="https://api.stlouisfed.org/fred",
             base_url_env="FRED_BASE_URL",
-            per_minute=60,
+            per_minute=100,
             burst=5,
             run_budget=40
         ),
