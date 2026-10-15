@@ -1,8 +1,11 @@
 """LimitedModel against a local fake OpenRouter: every request is limited, counted, and
 retried or rerouted the way TDD §12 says. No network and no API key."""
+import io;
 import os;
 import re;
 import time;
+import from contextlib { redirect_stdout }
+import from importlib { import_module }
 import from pathlib { Path }
 import from agents.models {
     KILL_SWITCH_ENV,
@@ -179,4 +182,20 @@ test "a rejected key is raised at once, since a second model would be rejected t
         scripted_vote([(401, "")]);
     }
     assert len(fake.requests) == 1;
+}
+
+test "LiteLLM's failed cost lookup on OpenRouter's unprefixed model name prints nothing" {
+    litellm = import_module("litellm");
+    response = litellm.ModelResponse(
+        model=PRIMARY_MODEL.removeprefix("openrouter/"),
+        choices=[{"message": {"role": "assistant", "content": "ok"}}],
+        usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+    );
+    printed = io.StringIO();
+    with redirect_stdout(printed) {
+        try {
+            litellm.completion_cost(completion_response=response);
+        } except litellm.BadRequestError {}
+    }
+    assert "Provider List" not in printed.getvalue();
 }

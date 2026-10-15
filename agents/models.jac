@@ -11,6 +11,7 @@ import os;
 import threading;
 import time;
 import from datetime { datetime, timezone }
+import from importlib { import_module }
 import from jaclang.byllm.lib { AuthenticationError, ConfigurationError, Model, RateLimitError }
 
 # Chosen by spike #12 (docs/spikes/2026-10-08-free-models.md): the only free model with every
@@ -23,6 +24,15 @@ glob REQUESTS_PER_MINUTE: int = 18;
 # Spike #12's slowest successful request took 153 s; LiteLLM's default would wait 600 s.
 glob REQUEST_TIMEOUT_S: float = 180.0;
 glob KILL_SWITCH_ENV: str = "TRADING_AGENT_DISABLE_MODELS";
+
+# OpenRouter answers with the model name minus its "openrouter/" prefix, so LiteLLM's cost
+# lookup after every response fails to find a provider and prints a "Provider List" banner
+# three or four times before swallowing the error; a 20-ticker pass printed 213. Errors still
+# raise; only the banner goes. The import is dynamic because a static `import litellm` makes
+# `jac check` analyze all of LiteLLM's source, which takes minutes.
+with entry {
+    import_module("litellm").suppress_debug_info = True;
+}
 
 """Raised instead of a provider request while the kill switch is on."""
 obj ModelsDisabledError(Exception) {}
