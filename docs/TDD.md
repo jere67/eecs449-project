@@ -396,6 +396,7 @@ The Orchestrator talks only to the agent layers; Alpaca sees nothing until the r
 
 The scheduler evaluates cron expressions in UTC with day 0 as Monday ([scheduler reference](https://github.com/jaseci-labs/jac/blob/v0.37.12/jac/jaclang/cli/docs/reference/plugins/jac-scale-scheduler.md)), so each job is registered at both its EDT and EST offsets (for example `cron="30 11,12 * * 0-4"`) and proceeds only if New York time matches.
 Static jobs take a Postgres lease so that a multi-replica deploy fires each tick once ([release notes, 0.37.5](https://github.com/jaseci-labs/jac/blob/v0.37.12/jac/jaclang/cli/docs/community/release_notes/jaclang.md)); the run-date idempotency key still stops a second firing if the lease check fails.
+The morning job lives in `run/jobs.jac`, imported by `main.jac` so the server registers it at startup; it runs as the system user, which reaches `root.shared`, and only a firing between 7:30 and 7:45 a.m. New York time on a weekday starts a run.
 
 | Time | Phase | Owner | Output |
 | --- | --- | --- | --- |
