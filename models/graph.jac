@@ -3,6 +3,7 @@
     root.shared
       └─ Portfolio
            ├─ Holds ──> Position ──OpenedBy──> Decision
+           ├─ Counted ──> RequestCount(day)
            └─ Ran ──> Run(run_date)
                 ├─ HasMacro ──> MacroRecord
                 └─ Covers ──> Coverage(ticker)
@@ -99,6 +100,13 @@ node Run {
         model_requests: int = 0,
         prompt_tokens: int = 0,
         completion_tokens: int = 0;
+}
+
+"""Free-model requests the app made on one UTC day (TDD §12, request controls), kept in the
+graph so the count survives a restart. `day` is "YYYY-MM-DD" in UTC."""
+node RequestCount {
+    has day: str,
+        used: int;
 }
 
 node MacroRecord {
@@ -210,6 +218,7 @@ node InsightCard {
 edge Holds: Portfolio --> Position {}
 edge OpenedBy: Position --> Decision {}
 edge Ran: Portfolio --> Run {}
+edge Counted: Portfolio --> RequestCount {}
 edge HasMacro: Run --> MacroRecord {}
 edge Covers: Run --> Coverage {}
 edge Researched: Coverage --> ResearchRecord {}

@@ -10,12 +10,14 @@ import from pathlib { Path }
 import from agents.models {
     KILL_SWITCH_ENV,
     LIMITER,
+    OPENROUTER_API_BASE_ENV,
     LimitedModel,
     ModelsDisabledError,
     PRIMARY_MODEL,
     RequestLimiter,
     arbiter_llm,
     orchestrator_llm,
+    provider_requests_left,
     research_llm,
     retry_llm,
     specialist_llm
@@ -198,4 +200,37 @@ test "LiteLLM's failed cost lookup on OpenRouter's unprefixed model name prints 
         } except litellm.BadRequestError {}
     }
     assert "Provider List" not in printed.getvalue();
+}
+
+"""Call provider_requests_left with the key and API base pointed at the fake."""
+def requests_left_from_fake(usage: dict[str, int] | None, key: str = "test-key") -> int | None {
+    fake.key_usage = usage;
+    saved = {name: os.environ.get(name) for name in ["OPENROUTER_API_KEY", OPENROUTER_API_BASE_ENV]};
+    os.environ["OPENROUTER_API_KEY"] = key;
+    os.environ[OPENROUTER_API_BASE_ENV] = test_llm.config["base_url"];
+    try {
+        return provider_requests_left();
+    } finally {
+        for (name, value) in saved.items() {
+            if value is None {
+                os.environ.pop(name, None);
+            } else {
+                os.environ[name] = value;
+            }
+        }
+    }
+}
+
+test "OpenRouter's count of free requests left is read from GET /key" {
+    before = LIMITER.sent;
+    assert requests_left_from_fake({"used": 120, "limit": 1000, "remaining": 880}) == 880;
+    assert fake.key_requests[-1] == "Bearer test-key";
+    # It is not a model request.
+    assert LIMITER.sent == before;
+}
+
+test "an unreadable or missing count, or no key, gives None" {
+    assert requests_left_from_fake(None) is None;
+    assert requests_left_from_fake({"used": 5}) is None;
+    assert requests_left_from_fake({"remaining": 9}, key="") is None;
 }

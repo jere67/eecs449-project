@@ -3,7 +3,8 @@
 Requests are answered from a script of (status, content) pairs in order and recorded, so a
 test can count exactly how many requests reached the provider. A request beyond the script
 gets a 500, which makes an unexpected extra request fail loudly. `delays` holds seconds to
-wait before answering each request in order, to make a request time out.
+wait before answering each request in order, to make a request time out. `key_usage` is
+what GET /key reports as `free_model_daily_requests` (None answers 500).
 """
 import json;
 import threading;
@@ -13,7 +14,9 @@ import from http.server { BaseHTTPRequestHandler, ThreadingHTTPServer }
 obj FakeOpenRouter {
     has script: list[tuple[int, str]] = [],
         delays: list[float] = [],
-        requests: list[dict] = [];
+        requests: list[dict] = [],
+        key_usage: dict[str, int] | None = None,
+        key_requests: list[str] = [];
     has _server: ThreadingHTTPServer | None = None,
         _lock: threading.Lock | None = None;
 
@@ -68,6 +71,22 @@ def completion_body(model: str, content: str) -> dict[str, object] {
 }
 
 class _Handler(BaseHTTPRequestHandler) {
+    def do_GET(self: _Handler) {
+        fake = getattr(self.server, "fake") as FakeOpenRouter;
+        fake.key_requests.append(self.headers.get("Authorization", ""));
+        if self.path.endswith("/key") and fake.key_usage is not None {
+            (status, payload) = (200, {"data": {"label": "fake", "free_model_daily_requests": fake.key_usage}});
+        } else {
+            (status, payload) = (500, {"error": {"message": "fake status 500", "code": 500}});
+        }
+        data = json.dumps(payload).encode();
+        self.send_response(status);
+        self.send_header("Content-Type", "application/json");
+        self.send_header("Content-Length", str(len(data)));
+        self.end_headers();
+        self.wfile.write(data);
+    }
+
     def do_POST(self: _Handler) {
         length = int(self.headers.get("Content-Length", "0"));
         body = json.loads(self.rfile.read(length));
