@@ -86,7 +86,8 @@ obj Stubs {
     has symbols: list[str] = ["AAPL", "MSFT"],
         provider_left: int | None = 900,
         trading: bool = True,
-        collect_error: str = "";
+        collect_error: str = "",
+        shortlist_sizes: list[int] = [];
     has research_llm: MockLLM | None = None,
         specialist_llm: MockLLM | None = None,
         arbiter_llm: MockLLM | None = None,
@@ -98,7 +99,8 @@ obj Stubs {
         self.arbiter_llm = MockLLM(model_name="mock-arbiter", config={"outputs": [MockRawResponse(content=REVIEW_JSON)] * 10});
         macro_llm = MockLLM(model_name="mock-macro", config={"outputs": [MockRawResponse(content=MACRO_JSON)]});
         stubs = self;
-        def collect(_run_day: str, open_positions: list[str], _config: PassConfig) -> Collection {
+        def collect(_run_day: str, open_positions: list[str], config: PassConfig) -> Collection {
+            stubs.shortlist_sizes.append(config.screen.shortlist_size);
             if stubs.collect_error {
                 raise RuntimeError(stubs.collect_error);
             }
@@ -275,6 +277,15 @@ test "a reduced run screens 10 tickers and draws one sample per specialist" {
     session = outcome.session;
     assert session is not None and session.config.samples == 1 and session.config.extra_samples == 0;
     assert stubs.specialist_llm is not None and len(stubs.specialist_llm.seen_prompts) == 5;
+    assert stubs.shortlist_sizes == [10];
+}
+
+test "reduced mode never screens or samples more than the standard limits" {
+    stubs = Stubs(provider_left=300, symbols=["AAPL"]);
+    outcome = run_day(stubs, team(), None, RunLimits(shortlist=5, samples=1, reduced_samples=2));
+    assert stubs.shortlist_sizes == [5];
+    session = outcome.session;
+    assert session is not None and session.config.samples == 1;
 }
 
 test "the run claim is taken once per date" {

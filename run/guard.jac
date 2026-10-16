@@ -500,7 +500,7 @@ def daily_run(
     }
     run.reduced_mode = checked.reduced;
     holdings = holdings_of(portfolio);
-    pass_config = PassConfig(screen=ScreenConfig(shortlist_size=limits.reduced_shortlist if checked.reduced else limits.shortlist));
+    pass_config = PassConfig(screen=ScreenConfig(shortlist_size=min(limits.reduced_shortlist, limits.shortlist) if checked.reduced else limits.shortlist));
     try {
         collection = collect_pass(run_day, sorted(holdings), pass_config);
     } except Exception as e {
@@ -509,7 +509,7 @@ def daily_run(
         _close(run, RunStatus.FAILED, f"Failed: {reason}. Every open position holds.");
         return RunOutcome(run_day=run_day, status=RunStatus.FAILED, run=run, preflight=checked, note=reason);
     }
-    config = ConsensusConfig(samples=limits.reduced_samples, extra_samples=0) if checked.reduced else ConsensusConfig(samples=limits.samples);
+    config = ConsensusConfig(samples=min(limits.reduced_samples, limits.samples), extra_samples=0) if checked.reduced else ConsensusConfig(samples=limits.samples);
     session = RunSession(run_day=run_day, collection=collection, holdings=holdings, config=config, limits=limits, run_requests=checked.run_requests);
     session.write_macro();
     (status, said) = (RunStatus.FALLBACK, "");
