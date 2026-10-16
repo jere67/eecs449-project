@@ -895,6 +895,7 @@ A local model through Ollama is fine for manual prompt work, but local models ar
 | Parse and transient-error retries | About 20 | `max_output_retries = 1` and up to two retries on timeouts; every retry is a request |
 | **Total** | **About 460** | **At 18 requests a minute, at least 26 minutes of model time** |
 
+The Analysis exit run measured 530 requests and 44 minutes for this configuration: retries took about 150 requests, not 20, and the loop and follow-ups fewer than planned, so the 600-request run budget holds about 22 tickers ([exit run](runs/2026-10-16-analysis-exit-run.md)).
 An on-demand report on a ticker not already covered that day uses about 22 requests: 3 research, 15 specialist samples, 1 Arbiter, and a few Orchestrator steps.
 A global cap of 15 new reports a day bounds reports at about 330 requests, so the daily total stays under about 790 of the 1,000 allowed, leaving room for further retries.
 
