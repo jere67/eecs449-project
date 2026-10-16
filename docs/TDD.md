@@ -639,7 +639,10 @@ Its authority is deliberately one-sided:
 
 - It may **confirm** the draft action or **downgrade** it (BUY to NO ACTION, or ADD to HOLD), with a written reason.
 - It may **not upgrade** a result, so one model cannot override the ensemble into a trade.
-- It must write the thesis, the two biggest risks, a time stop, and a price- or event-based exit condition, all stored on the `Decision` node.
+- It must write the thesis, the two biggest risks, and a price- or event-based exit condition, all stored on the `Decision` node with a time stop that code sets: the trading date the median horizon of the votes behind the action points to (Section 3, rule 11).
+
+Code applies the verdict (`agents/arbiter.jac`): a downgrade asked of a SELL, TRIM, HOLD, or NO ACTION is recorded as not applied, and a verdict outside CONFIRM and DOWNGRADE fails the parse.
+If the Arbiter cannot rule, a BUY becomes NO ACTION and an ADD becomes HOLD, since no reviewed trade beats an unreviewed one, and any other draft stands.
 
 ### Scoring and calibration
 
