@@ -603,17 +603,6 @@ def trading_date_now -> str {
     return datetime.now(NEW_YORK).date().isoformat();
 }
 
-"""The daily pipeline as a walker (TDD §3, code sketch). It is not an endpoint: main.jac does
-not import it, and the scheduled job spawns it (TDD §14, unauthorized run triggers)."""
-walker DailyRun {
-    has run_day: str = "";
-
-    can start with Root entry {
-        outcome = daily_run(team_portfolio(), self.run_day or trading_date_now());
-        report {"run_day": outcome.run_day, "status": outcome.status.value, "note": outcome.note};
-    }
-}
-
 def _domain(name: str) -> Domain | None {
     for d in TICKER_DOMAINS {
         if name.strip().lower() == d.value {

@@ -417,6 +417,8 @@ Static jobs take a Postgres lease so that a multi-replica deploy fires each tick
 The Orchestrator is a `by orchestrator_llm(tools=[...])` function running on the same free model as every other agent, through its own model instance (Section 3).
 It can only act through these tools.
 Tools take ticker lists, so a 20-ticker run fits inside the iteration cap: covering each ticker one tool call at a time would need more than 40 iterations.
+The tools are the run session's own methods (`run/guard.jac`), handed to the loop in `agents/orchestrator.jac` by `run/orchestration.jac`; the loop is capped at 12 iterations, and its `on_iteration` hook stops it with a summary when the run's request budget is down to two requests or its 90-minute deadline has passed.
+The Macro sub-agent runs before the loop starts, so the run context already carries the macro brief.
 
 | Tool | What it does | Limits |
 | --- | --- | --- |
