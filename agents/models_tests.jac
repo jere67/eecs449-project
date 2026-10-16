@@ -1,8 +1,11 @@
 """LimitedModel against a local fake OpenRouter: every request is limited, counted, and
 retried or rerouted the way TDD §12 says. No network and no API key."""
+import io;
 import os;
 import re;
 import time;
+import from contextlib { redirect_stdout }
+import from importlib { import_module }
 import from pathlib { Path }
 import from agents.models {
     KILL_SWITCH_ENV,
@@ -17,6 +20,7 @@ import from agents.models {
     retry_llm,
     specialist_llm
 }
+import from jaclang.byllm.lib { AuthenticationError }
 import from models.agents { Stance, Vote }
 import from tests.fakes.openrouter { FakeOpenRouter }
 
@@ -31,7 +35,8 @@ glob test_llm: LimitedModel = LimitedModel(
     api_key="test-key",
     config={"base_url": fake.start()},
     limiter=test_limiter,
-    backoff_s=0.0
+    backoff_s=0.0,
+    request_timeout_s=1.0
 );
 
 def cast_vote(ticker: str) -> Vote by test_llm(max_output_retries=1);
@@ -149,4 +154,48 @@ test "no agent calls the builtin llm, which bypasses the limiter" {
         }
     }
     assert not offenders, f"Call a role model from agents/models.jac, not the builtin llm: {offenders}";
+}
+
+test "a primary model that is down falls back to the second free model" {
+    (vote, sent, counted) = scripted_vote([(503, ""), (200, VOTE_JSON)]);
+    assert vote.stance == Stance.BUY;
+    assert [r["model"] for r in sent] == [PROVIDER_PRIMARY, PROVIDER_FALLBACK];
+    assert counted == 2;
+}
+
+test "a request that hangs times out and falls back, and the fallback is counted" {
+    fallbacks = test_limiter.fallbacks;
+    fake.delays = [3.0];
+    try {
+        (vote, sent, counted) = scripted_vote([(200, VOTE_JSON), (200, VOTE_JSON)]);
+    } finally {
+        fake.delays = [];
+    }
+    assert vote.stance == Stance.BUY;
+    assert [r["model"] for r in sent] == [PROVIDER_PRIMARY, PROVIDER_FALLBACK];
+    assert counted == 2;
+    assert test_limiter.fallbacks == fallbacks + 1;
+}
+
+test "a rejected key is raised at once, since a second model would be rejected too" {
+    with testraises(AuthenticationError) {
+        scripted_vote([(401, "")]);
+    }
+    assert len(fake.requests) == 1;
+}
+
+test "LiteLLM's failed cost lookup on OpenRouter's unprefixed model name prints nothing" {
+    litellm = import_module("litellm");
+    response = litellm.ModelResponse(
+        model=PRIMARY_MODEL.removeprefix("openrouter/"),
+        choices=[{"message": {"role": "assistant", "content": "ok"}}],
+        usage={"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+    );
+    printed = io.StringIO();
+    with redirect_stdout(printed) {
+        try {
+            litellm.completion_cost(completion_response=response);
+        } except litellm.BadRequestError {}
+    }
+    assert "Provider List" not in printed.getvalue();
 }

@@ -1,6 +1,7 @@
 """The team graph's typed edges connect the decision trail end to end (TDD §11)."""
 import uuid;
-import from models.agents { Domain, Evidence, ResearchReport, Specialist, Stance, Vote }
+import from models.research { RegimeInputs }
+import from models.agents { Domain, Evidence, MacroReport, ResearchReport, RiskRegime, Specialist, Stance, Vote }
 import from models.graph {
     CheckedBy,
     Coverage,
@@ -10,6 +11,8 @@ import from models.graph {
     Decision,
     Fill,
     FilledBy,
+    HasMacro,
+    MacroRecord,
     Order,
     OrderPurpose,
     OrderSide,
@@ -96,6 +99,28 @@ test "a fill traces back through order, risk check, decision, coverage, and run"
         del check;
         del decision;
         del cov;
+        del run;
+        del team;
+    }
+}
+
+test "a run's macro record keeps the regime inputs computed in code" {
+    team = root ++> Portfolio(name=f"test-{uuid.uuid4()}", mode=PortfolioMode.AUTO, starting_cash=100000.0, opened_at=AT);
+    run = team +>:Ran():+> Run(run_date="2026-10-15", started_at=AT);
+    run +>:HasMacro():+> MacroRecord(
+        as_of=AT,
+        model="mockllm",
+        body=MacroReport(summary="s", regime=RiskRegime.NEUTRAL, confidence=0.5),
+        inputs=RegimeInputs(spy_close=650.0, spy_sma_200=600.0, spy_vol_20=0.14, spy_as_of="2026-10-14")
+    );
+    try {
+        found = [run ->:HasMacro:->][0];
+        assert found.inputs is not None and found.inputs.spy_above_200d() is True;
+        assert found.body.regime == RiskRegime.NEUTRAL;
+    } finally {
+        for gone in [run ->:HasMacro:->] {
+            del gone;
+        }
         del run;
         del team;
     }

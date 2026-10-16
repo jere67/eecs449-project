@@ -20,6 +20,7 @@ Timestamps are ISO 8601 strings in UTC, and trading dates are "YYYY-MM-DD" in Ne
 (TDD §3, rule 11).
 """
 import from models.agents { Domain, MacroReport, ResearchReport, Specialist, Vote }
+import from models.research { RegimeInputs }
 
 enum PortfolioMode: str {
     AUTO = "auto",
@@ -104,6 +105,7 @@ node MacroRecord {
     has as_of: str,
         model: str,
         body: MacroReport;
+    has inputs: RegimeInputs | None = None;
 }
 
 node Coverage {

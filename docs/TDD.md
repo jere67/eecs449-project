@@ -347,6 +347,9 @@ Each rule names its evidence: the bundled docs, the runtime source at the `v0.37
    Ranges such as confidence in [0, 1] are not part of the schema, so they go in `sem` text and in a `postinit` check, which byLLM treats as a parse failure and retries ([source](https://github.com/jaseci-labs/jac/blob/v0.37.12/jac/jaclang/byllm/impl/mtir.impl.jac#L306-L316); spike).
 5. **Launch `flow` through a helper.** The call inside `flow` runs on the worker thread, so a loop or comprehension variable can change before it is read; a helper whose parameter holds the value fixes it ([concurrency reference](https://github.com/jaseci-labs/jac/blob/v0.37.12/jac/jaclang/cli/docs/reference/language/concurrency.md)).
    The `jac guide jac-concurrency` example still shows the racy form, so follow the reference.
+   Only scalars, freshly built values, and `imm` values may cross into `flow`; an object held in a variable or parameter is rejected as not sendable (E1308), by `jac check` and by `jac run` alike.
+   `flow` runs on the runtime's default thread pool, `min(32, cpu + 4)` threads ([source](https://github.com/jaseci-labs/jac/blob/v0.37.12/jac/jaclang/runtime/runtime.jac)), which suits CPU work.
+   The research pass waits on the network, and on `flow` its first exit run reached only about 3.5 model requests a minute against the limiter's 18, so `run/research.jac` submits collectors and sub-agents to its own 32-thread pool; rule 6 applies to those threads too ([exit run](runs/2026-10-15-research-exit-run.md)).
 6. **No graph access inside `flow`.** Worker threads do not inherit the request context and fall back to the process-wide context, which sees the super root ([source](https://github.com/jaseci-labs/jac/blob/v0.37.12/jac/jaclang/runtime/impl/runtime.impl.jac#L507-L513); spike), so collectors return values and every graph write happens on the walker's thread after `wait`.
 7. **Every endpoint is imported by `main.jac`.** A `def:pub` function that the serving entry module does not import returns 404 or 405 ([endpoints guide](https://github.com/jaseci-labs/jac/blob/v0.37.12/jac/jaclang/cli/skills/jac-sv-endpoints.md); [issue #7695](https://github.com/jaseci-labs/jac/issues/7695), closed without a fix), which hit the team's previous project; a smoke test POSTs every endpoint.
 8. **Know what decides placement.** Python imports anchor a module to the server and JSX places code on the client, and client-reachable code that uses a Python import is a compile error ([codespaces guide](https://github.com/jaseci-labs/jac/blob/v0.37.12/jac/jaclang/cli/skills/jac-codespaces.md)).
@@ -444,7 +447,7 @@ Tools take ticker lists, so a 20-ticker run fits inside the iteration cap: cover
 | --- | --- |
 | A free data API is down or rate-limited | Retry with backoff; then use cached data inside its freshness limit; else record a data gap |
 | An agent's output fails type validation | byLLM retries the parse once with corrective feedback (`max_output_retries = 1`; [byLLM reference](https://github.com/jaseci-labs/jac/blob/v0.37.12/jac/jaclang/cli/docs/reference/plugins/byllm.md)); if that fails, the call site catches `OutputConversionError` and calls the same role once at temperature 0.2 through a separate model instance; then it drops that sample and counts it against the reliability metric |
-| A model call times out, cannot connect, or gets a 5xx | byLLM retries it up to twice with backoff ([source](https://github.com/jaseci-labs/jac/blob/v0.37.12/jac/jaclang/byllm/llm.impl/basellm.impl.jac#L1460-L1478)), each retry passing the limiter; after that the call site records the error |
+| A model call times out, cannot connect, or gets a 5xx | Each request times out after 180 seconds (spike #12's slowest took 153); `LimitedModel` sends a failed request to the fallback model, since byLLM maps these errors to no `ByLLMError` it could catch ([source](https://github.com/jaseci-labs/jac/blob/v0.37.12/jac/jaclang/byllm/llm.impl/model.impl.jac#L236-L252); #53); if that fails too, byLLM retries up to twice with backoff ([source](https://github.com/jaseci-labs/jac/blob/v0.37.12/jac/jaclang/byllm/llm.impl/basellm.impl.jac#L1460-L1478)), each retry passing the limiter; after that the call site records the error |
 | A model call raises any other error | Caught at the call site; the sample is dropped, or the ticker defaults to HOLD, with the error recorded |
 | Fewer than 60% of specialist samples succeed for a ticker | Force HOLD for that ticker |
 | OpenRouter returns 429 (rate limited) | byLLM maps it to `RateLimitError` without retrying ([source](https://github.com/jaseci-labs/jac/blob/v0.37.12/jac/jaclang/byllm/llm.impl/model.impl.jac#L236-L252)), so `LimitedModel` backs off exponentially up to three times, as [OpenRouter's limits page](https://openrouter.ai/docs/api_reference/limits) advises; the reference implementation uses a fixed schedule, and reading `Retry-After` or `X-RateLimit-Reset` from the response is a planned refinement |
@@ -496,7 +499,7 @@ Its hit rate is measured separately, by comparing next-10-day returns of shortli
 
 ## 6. Research Agent: free data sources and sub-agents
 
-The Research layer draws on seven free sources through three per-ticker sub-agents (Market, Fundamentals, News) and one per-run Macro sub-agent.
+The Research layer draws on six free sources through three per-ticker sub-agents (Market, Fundamentals, News) and one per-run Macro sub-agent.
 Deterministic collectors fetch and cache the raw data; LLM sub-agents only read what the collectors return and must cite a source URL for every claim.
 Social-media and alternative data sources are stretch goals (Section 16).
 
@@ -505,11 +508,16 @@ Social-media and alternative data sources are stretch goals (Section 16).
 | Sub-agent | Scope | Main inputs | Runs |
 | --- | --- | --- | --- |
 | Market and Technical | Trend, momentum, volatility, volume, relative strength | Alpaca daily bars; indicators computed in code | Per ticker |
-| Fundamentals and Filings | Growth, margins, balance sheet, valuation, guidance, insider and institutional activity | SEC XBRL company facts, 10-K/10-Q/8-K text, Form 4, 13F; Finnhub key metrics, recommendation trends, EPS surprises | Per ticker |
+| Fundamentals and Filings | Growth, margins, balance sheet, valuation, guidance, insider and institutional activity | SEC XBRL company facts, 10-K/10-Q/8-K text, Form 4; Finnhub key metrics, recommendation trends, EPS surprises | Per ticker |
 | News and Events | What happened, what is scheduled, and whether news is priced in | Alpaca news (Benzinga), Finnhub company news and earnings calendar, SEC 8-K filings | Per ticker |
-| Macro | Rates, inflation, growth, volatility regime, sector rotation | FRED series such as DGS2, DGS10, VIXCLS, CPIAUCSL, and UNRATE; sector ETF bars from Alpaca | Once per run |
+| Macro | Market trend and volatility regime, rates and inflation expectations, sector rotation | Alpaca daily bars for SPY, four Treasury funds (SHY, IEF, TLT, TIP), and the 11 sector funds | Once per run |
+
+Each sub-agent reads a brief built in code (`research/briefs.jac`): numbered sources, each with the exact URL and publish time to cite, figures already in words, and article and filing text capped inside untrusted-data blocks, about 6,000 tokens in all.
+After the call, code checks every evidence item against the brief: a claim citing any other URL is removed and counted, and `published` is taken from the brief rather than the model (`agents/research.jac`).
+A report counts as complete when the call succeeded and at least one claim survived that check; a failed call is a HOLD at confidence 0 with the error in `data_gaps`.
 
 Indicators are computed in code (`research/indicators.jac`, plain typed functions checked against hand-computed values), never by the LLM: 20/50/200-day moving averages, RSI(14), MACD, Bollinger width, ATR(14), 52-week range position, relative strength against SPY and the sector ETF, relative volume, 20-day realized volatility, and 20- and 60-day momentum.
+The Macro sub-agent reads rates from Treasury fund returns, since a bond fund's price moves against its yields, and inflation expectations from TIP's strength against IEF, a fund of similar maturity without inflation protection.
 
 ### Source inventory
 
@@ -518,9 +526,8 @@ Indicators are computed in code (`research/indicators.jac`, plain typed function
 | [Alpaca Market Data, Basic](https://docs.alpaca.markets/us/docs/about-market-data-api) | Stock and ETF bars since 2016; real-time IEX quotes | REST + WebSocket, API key | Free; 200 historical calls/min; 30 WebSocket symbols; latest 15 minutes of consolidated data restricted | Screener, Market, Macro | Daily decisions use prior-day bars, so the 15-minute restriction does not matter |
 | [Alpaca News](https://docs.alpaca.markets/us/docs/historical-news-data) | Benzinga news since 2015, 130+ articles a day | REST + [WebSocket](https://docs.alpaca.markets/us/docs/streaming-real-time-news) | Same free key | News, Screener | Primary news source |
 | Alpaca Trading API ([assets](https://docs.alpaca.markets/us/reference/get-v2-assets-1), [calendar](https://docs.alpaca.markets/us/reference/legacycalendar)) | Tradable symbols; market days and hours, including early closures | REST, API key | Free | Screener, Run Guard | Tradability checks and holiday detection |
-| SEC EDGAR ([APIs](https://www.sec.gov/search-filings/edgar-application-programming-interfaces), [fair access](https://www.sec.gov/os/accessing-edgar-data)) | Filing index, XBRL company facts, filing text, Form 4, 13F, 8-K | REST (`data.sec.gov`), no key | 10 requests/second with a declared User-Agent | Fundamentals, News | User-Agent with a team contact email is required |
+| SEC EDGAR ([APIs](https://www.sec.gov/search-filings/edgar-application-programming-interfaces), [fair access](https://www.sec.gov/os/accessing-edgar-data)) | Filing index, XBRL company facts, filing text, Form 4, 8-K | REST (`data.sec.gov`), no key | 10 requests/second with a declared User-Agent | Fundamentals, News | User-Agent with a team contact email is required |
 | [Finnhub, free](https://finnhub.io/pricing) | Company news (1 year), earnings calendar (1 month), recommendation trends, EPS surprises (4 quarters), key metrics | REST, API key | 60 calls/min; U.S. only; personal-use license | Fundamentals, News | Show derived results, not raw data |
-| [FRED](https://fred.stlouisfed.org/docs/api/api_key.html) | Treasury yields, VIX close, fed funds, CPI, unemployment, and other series | REST, [free API key](https://fredhelp.stlouisfed.org/fred/account/fred-account-features/register/) | Free | Macro | The St. Louis Fed's database of Fed, BLS, and other series; VIX (CBOE) is copyrighted, so pages show only derived values, and the app shows FRED's required attribution ([terms](https://fred.stlouisfed.org/docs/api/terms_of_use.html)) |
 | S&P 500 constituents | Current members, GICS sectors, and dated index changes | Wikipedia [list](https://en.wikipedia.org/wiki/List_of_S%26P_500_companies) and [historical components](https://en.wikipedia.org/wiki/Historical_components_of_the_S%26P_500) | Free | Screener, historical harness | Weekly refresh |
 
 Social sources (Reddit, StockTwits, Bluesky, Wikipedia pageviews, Google Trends), options and short-sale data, and backup data providers are stretch goals (Section 16).
@@ -546,7 +553,7 @@ Freshness is measured from each datum's publish time, and the limits there are p
 - [ ] Create team Alpaca paper accounts and API keys
 - [ ] Create the OpenRouter account and buy $10 of credits once, which raises the free-model cap from 50 to 1,000 requests a day ([limits](https://openrouter.ai/docs/api_reference/limits))
 - [ ] Check that the OpenRouter account's privacy settings allow the free endpoints we use: OpenRouter has separate data-policy settings for free models and does not route to free endpoints that may train on or publish prompts unless those settings allow it ([provider logging](https://openrouter.ai/docs/guides/privacy/provider-logging))
-- [ ] Register free Finnhub and FRED API keys
+- [ ] Register a free Finnhub API key
 - [ ] Set the SEC User-Agent with a team contact email
 - [ ] Store every key in exported environment variables locally (`jac run` does not read `.env`; only `jac scale deploy`, `status`, and `destroy` do, per [source](https://github.com/jaseci-labs/jac/blob/v0.37.12/jac/jaclang/scale/plugin.jac#L262-L263)) and in `[scale.secrets]` when deployed ([Kubernetes reference](https://github.com/jaseci-labs/jac/blob/v0.37.12/jac/jaclang/cli/docs/reference/plugins/jac-scale-kubernetes.md)), never in the repo
 
@@ -567,9 +574,10 @@ Votes flow one way into code; only an ambiguous result loops back for more sampl
 | Technical | Trend, momentum, support and resistance, volatility, relative strength | Market and Technical |
 | News and Events | Materiality of news, whether it is priced in, upcoming catalysts such as earnings | News and Events |
 | Macro and Sector | Rate and inflation regime, sector rotation, sensitivity to scheduled releases | Macro; sector ETF data |
-| Flow and Positioning | Insider buying and selling, changes in institutional holdings | Fundamentals and Filings (Form 4, 13F) |
+| Flow and Positioning | Insider buying and selling; changes in institutional holdings once 13F data lands (#52) | Fundamentals and Filings (Form 4) |
 
 Flow data has different delays: Form 4 arrives within [two business days](https://www.sec.gov/files/forms-3-4-5.pdf) of an insider trade, while 13F holdings are quarterly and filed up to [45 days after quarter end](https://www.sec.gov/rules-regulations/staff-guidance/division-investment-management-frequently-asked-questions/frequently-asked-questions-about-form-13f), so the Flow specialist treats institutional data as weeks to months old.
+EDGAR has no per-issuer 13F endpoint: holdings sit in each manager's own filing, so a per-stock view needs SEC's quarterly [13F data sets](https://www.sec.gov/data-research/sec-markets-data/form-13f-data-sets) joined to tickers, which is a stretch goal (#52); until then the Flow specialist reads Form 4 only.
 
 A Critic role that writes the strongest opposing case for the Arbiter is a stretch goal (Section 16).
 
@@ -660,7 +668,7 @@ The MVP is long only: SELL means exit or trim, never short.
 | New positions per day | 3 | Keep the highest-conviction 3 |
 | Daily turnover | 25% of portfolio value | Scale down, exits first |
 | Drawdown breaker | Halt new buys after a 10% drawdown from peak | Exits and stops still run |
-| Regime filter | If SPY is below its 200-day average and VIX is above 30, gross exposure is capped at 50% | Scale buys down |
+| Regime filter | If SPY is below its 200-day average and its 20-day realized volatility, annualized, is above 30%, gross exposure is capped at 50% | Scale buys down |
 | Earnings blackout | No new entry within 2 trading days before earnings | Reject the entry; log it as insight only |
 | Liquidity | Order no larger than 1% of 20-day average daily volume | Resize down |
 | Instrument checks | Active, tradable, not halted, price above $5 | Reject |
@@ -913,7 +921,7 @@ A single-agent baseline with the same tools is a stretch goal (Section 16).
 
 | Metric | Definition | Target for the full system |
 | --- | --- | --- |
-| Sharpe ratio | Mean daily return in excess of the 3-month T-bill rate (FRED `DTB3`), divided by its standard deviation, times √252 ([Sharpe](https://web.stanford.edu/~wfsharpe/art/sr/sr.htm)) | Above SPY |
+| Sharpe ratio | Mean daily return divided by its standard deviation, times √252, with a risk-free rate of zero ([Sharpe](https://web.stanford.edu/~wfsharpe/art/sr/sr.htm)) | Above SPY |
 | Maximum drawdown | Largest peak-to-trough decline | No worse than SPY |
 | Excess return vs. equal-weight shortlist | Full-system return minus the screen-only portfolio's | Positive |
 | Screen hit rate | Shortlisted names' next-10-day return vs. the rest of the S&P 500 | Positive spread |
@@ -948,7 +956,6 @@ The largest risks are untrusted text reaching agents, leaked credentials, and a 
 - **Not investment advice.** Disclaimers on every page and every insight card; simulated money only.
 - **Data licenses.** Free tiers with personal or non-commercial terms are used for an educational, non-commercial project; raw data is not redistributed.
 - **SEC fair access.** Declared User-Agent with a team contact email; requests stay under 10 per second ([SEC](https://www.sec.gov/os/accessing-edgar-data)).
-- **FRED attribution.** Pages that show FRED-derived values state "This product uses the FRED® API but is not endorsed or certified by the Federal Reserve Bank of St. Louis" ([terms](https://fred.stlouisfed.org/docs/api/terms_of_use.html)).
 - **Privacy.** Only email and an optional Alpaca connection are stored; users can delete their account and data.
 
 ### Observability
@@ -1048,6 +1055,7 @@ Prediction markets need their own evaluation metric, the Brier score of the agen
 | Second free model for sampling | Alternate specialist samples across two free models to decorrelate errors | Depends on OpenRouter's free list at the time |
 | Single-agent baseline | A second paper portfolio run by one agent with the same tools | Roughly doubles daily model requests |
 | Options and short-sale signals | Put/call and implied-volatility proxies from Alpaca's free [indicative options feed](https://docs.alpaca.markets/us/docs/historical-option-data), a 15-minute-delayed derivative of OPRA; [FINRA daily short-sale volume](https://www.finra.org/finra-data/browse-catalog/short-sale-volume-data/daily-short-sale-volume-files) | Short-sale volume is not short interest and covers only off-exchange (TRF, ADF, ORF) trades ([FINRA](https://www.finra.org/rules-guidance/notices/information-notice-051019)) |
+| Institutional holdings (#52) | Quarterly changes in institutional ownership for the Flow specialist | EDGAR has no per-issuer 13F endpoint; built from SEC's quarterly [13F data sets](https://www.sec.gov/data-research/sec-markets-data/form-13f-data-sets), which identify securities by CUSIP, not ticker |
 | Congressional trade disclosures | House and Senate periodic transaction reports | Scraping required; check the filing lag before relying on it |
 | Live committee page | Real-time run progress through polling or a streaming (SSE) endpoint | Dashboard polish |
 | Backup data providers | FMP (250 calls a day; [FAQ](https://site.financialmodelingprep.com/faqs)) and Twelve Data (800 calls a day, 8 a minute, non-commercial use; [pricing](https://twelvedata.com/pricing)) | Only if a core source proves unreliable |
@@ -1099,7 +1107,7 @@ Every external claim in this document links its source where it is made; this li
 
 - **Jac.** The docs bundled with Jac 0.37.12, at the `v0.37.12` tag on GitHub and through `jac guide`, are the authority; the docs.jaseci.org website lags them and still shows `jac start`, FastAPI, and SQLite in places.
   Behavior the bundled docs do not state cites the runtime source at the same tag, which is byte-identical to the installed runtime, and the spike that confirmed it on October 3, 2026.
-- **Vendors.** Alpaca, OpenRouter, LiteLLM, SEC, FINRA, FRED, and the stretch-goal providers are cited from their own documentation or pricing pages.
+- **Vendors.** Alpaca, OpenRouter, LiteLLM, SEC, FINRA, and the stretch-goal providers are cited from their own documentation or pricing pages.
 - **Spikes.** The Section 3 sketch, the temperature leak, the `flow` context loss, the admin-password behavior, `root.shared` reads, and the rate limiter against a fake OpenRouter server were run on Jac 0.37.12; their programs belong in `tests/` once the repo layout lands.
 - **Not yet sourced.** The course dates (Section 17 asks for the syllabus link) and design parameters such as thresholds and limits, which are the team's choices and are tuned in Section 13.
 
@@ -1137,7 +1145,6 @@ Every external claim in this document links its source where it is made; this li
 
 - [EDGAR APIs](https://www.sec.gov/search-filings/edgar-application-programming-interfaces), [Accessing EDGAR Data](https://www.sec.gov/os/accessing-edgar-data), [Form 8-K](https://www.sec.gov/files/form8-k.pdf), [Forms 3, 4, and 5](https://www.sec.gov/files/forms-3-4-5.pdf), and the [Form 13F FAQ](https://www.sec.gov/rules-regulations/staff-guidance/division-investment-management-frequently-asked-questions/frequently-asked-questions-about-form-13f), U.S. Securities and Exchange Commission
 - [Finnhub pricing](https://finnhub.io/pricing), Finnhub
-- [FRED API keys](https://fred.stlouisfed.org/docs/api/api_key.html), [FRED account](https://fredhelp.stlouisfed.org/fred/account/fred-account-features/register/), and [FRED API terms](https://fred.stlouisfed.org/docs/api/terms_of_use.html), Federal Reserve Bank of St. Louis
 - [List of S&P 500 companies](https://en.wikipedia.org/wiki/List_of_S%26P_500_companies) and [Historical components of the S&P 500](https://en.wikipedia.org/wiki/Historical_components_of_the_S%26P_500), Wikipedia
 - [Holidays and trading hours](https://www.nyse.com/markets/hours-calendars), NYSE
 - [Regulatory Notice 26-10](https://www.finra.org/sites/default/files/2026-04/Regulatory-Notice-26-10.pdf), FINRA

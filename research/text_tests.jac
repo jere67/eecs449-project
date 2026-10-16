@@ -5,6 +5,7 @@ test "HTML becomes readable text" {
     html = "<p>Q3 revenue rose&nbsp;12% &amp; margins held.</p><script>alert(1)</script><style>p{}</style><ul><li>One</li><li>Two</li></ul><table><tr><td>A</td><td>B</td></tr></table>";
     assert html_to_text(html) == "Q3 revenue rose 12% & margins held.\n\nOne\n\nTwo\n\nA B";
     assert html_to_text("") == "";
+    assert html_to_text("<html><head><title>Document</title></head><body><p>Body</p></body></html>") == "Body";
 }
 
 test "a cap cuts at a word boundary and says so" {

@@ -102,7 +102,7 @@ obj MacroReport {
     }
 }
 
-sem MacroReport.summary = "Three to five sentences on rates, inflation, growth, volatility, and sector rotation.";
+sem MacroReport.summary = "Three to five sentences on the market's trend and volatility, rates and inflation expectations, and sector rotation.";
 sem MacroReport.regime = "Whether conditions favor taking equity risk, avoiding it, or neither.";
 sem MacroReport.confidence = "Probability in [0, 1] that the regime call is right.";
 sem MacroReport.evidence = "Every factual claim the summary relies on, each with its source.";

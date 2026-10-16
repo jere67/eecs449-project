@@ -17,3 +17,21 @@ obj Stamp {
 obj Stamped {
     has stamp: Stamp;
 }
+
+"""The market-regime figures the risk gate reads (TDD §8, regime filter), computed in code
+from SPY's daily bars rather than taken from the Macro sub-agent. `spy_vol_20` is SPY's
+20-day realized volatility, annualized, as a fraction. A missing figure is None, and the
+gate treats it as unknown."""
+obj RegimeInputs {
+    has spy_close: float | None = None,
+        spy_sma_200: float | None = None,
+        spy_vol_20: float | None = None,
+        spy_as_of: str = "";
+
+    def spy_above_200d -> bool | None {
+        if self.spy_close is None or self.spy_sma_200 is None {
+            return None;
+        }
+        return self.spy_close > self.spy_sma_200;
+    }
+}
