@@ -41,6 +41,11 @@ max_output_retries = 1
 [check.lint]
 select = ["all"]
 
+[scale.scheduler]
+# Install-time capability: run `jac install` after changing it. Runs the morning job
+# (run/jobs.jac) inside the server process.
+enabled = true
+
 [scale.admin]
 default_password = "${ADMIN_PASSWORD:-changeme}"
 
