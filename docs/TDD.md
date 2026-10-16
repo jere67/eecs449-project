@@ -437,6 +437,8 @@ Tools take ticker lists, so a 20-ticker run fits inside the iteration cap: cover
 - **Coverage.** Every shortlisted ticker and every open position ends the run with a `Decision`; a ticker lacking market, fundamentals, and news reports defaults to HOLD with reason "insufficient data."
 - **Fallback.** If the Orchestrator errors, times out, or aborts, the Run Guard executes the same phases in fixed order with no follow-ups.
   The dashboard marks the run as "fallback."
+  The Orchestrator's tools and the fallback both act on one `RunSession` (`run/guard.jac`), which holds the run's state and enforces every limit, so a refused move changes nothing and says why; a run counts as normal only when the Orchestrator itself submitted the decisions within the deadline.
+- **Run budget.** Each run may spend 600 model requests, enough for the standard run's 460 with retries, or fewer when the day has fewer left; a ticker whose panel no longer fits holds.
 - **Idempotency.** The run ID is the trading date, and the job claims its `Run` node before doing any work, so a second firing of the scheduler exits at once.
   Every order's `client_order_id` is derived from the run ID, ticker, and action (Section 8), so a job that fires twice cannot double-trade.
 - **Staleness.** Collectors stamp every datum with its fetch time; data older than its freshness limit is excluded and listed in the report's `data_gaps`.
@@ -789,6 +791,7 @@ Raw API responses live outside the graph in `store()`, referenced by key, becaus
 root.shared (written by the scheduled job; READ granted on each node)
   └─ Portfolio(team)
        ├─ Position* ──[opened_by]──> Decision
+       ├─ RequestCount(UTC day)*
        └─ Run(date)*
             ├─ MacroReport
             └─ Coverage(ticker)*
@@ -896,7 +899,7 @@ A global cap of 15 new reports a day bounds reports at about 330 requests, so th
 
 - **One shared limiter.** Every model request in the app passes the `LimitedModel` limiter, set to 18 requests a minute (Section 3).
   It sits at the provider-request level, so parse retries, transient-error retries, 429 retries, fallback calls, and ReAct iterations are all counted; a test against a fake OpenRouter server confirms the count.
-- **Count requests ourselves, and check against OpenRouter.** The limiter increments a per-UTC-day counter stored in the graph, and preflight also reads `free_model_daily_requests` (`used`, `limit`, `remaining`) from `GET /api/v1/key` ([limits](https://openrouter.ai/docs/api_reference/limits)), using whichever shows fewer requests left; the per-minute limit is not reported there.
+- **Count requests ourselves, and check against OpenRouter.** The limiter increments a per-UTC-day counter, which each run adds to a `RequestCount` node in the graph so it survives a restart, and preflight also reads `free_model_daily_requests` (`used`, `limit`, `remaining`) from `GET /api/v1/key` ([limits](https://openrouter.ai/docs/api_reference/limits)), using whichever shows fewer requests left; the per-minute limit is not reported there.
 - **Check before running.** Preflight switches to reduced mode (K = 1, shortlist of 10) if fewer than 500 requests remain for the UTC day.
 - **Protect the morning run.** On-demand reports become cache-only when fewer than 150 requests remain.
 - **Back off on 429.** byLLM does not retry rate-limit errors, so `LimitedModel` retries with exponential backoff, as OpenRouter [advises](https://openrouter.ai/docs/api_reference/limits); OpenRouter's own free-model 429s carry `X-RateLimit-Reset`, and `Retry-After` arrives only when every provider sent a hint, so reading those headers is a planned refinement.
