@@ -98,16 +98,6 @@ glob SOURCES: dict[str, Source] = {
             burst=5,
             run_budget=150
         ),
-        # 120 a minute per key is reported by client libraries, not by FRED's own docs,
-        # so pace at half that until a live run confirms it.
-        Source(
-            name="fred",
-            base_url="https://api.stlouisfed.org/fred",
-            base_url_env="FRED_BASE_URL",
-            per_minute=60,
-            burst=5,
-            run_budget=40
-        ),
         # Two pages a week; Wikimedia asks clients to keep request rates low.
         Source(
             name="wikipedia",
@@ -202,20 +192,6 @@ glob DATASETS: dict[str, Dataset] = {
             name="finnhub.metrics",
             source="finnhub",
             max_age_hours=7 * DAY,
-            cache_ttl_hours=24 * HOUR
-        ),
-        # Daily series such as DGS10 and VIXCLS post a day late; five days covers a holiday.
-        Dataset(
-            name="fred.daily",
-            source="fred",
-            max_age_hours=5 * DAY,
-            cache_ttl_hours=24 * HOUR
-        ),
-        # A monthly observation is dated the first of its month and released mid next month.
-        Dataset(
-            name="fred.monthly",
-            source="fred",
-            max_age_hours=75 * DAY,
             cache_ttl_hours=24 * HOUR
         ),
         # Refreshed weekly (TDD §6).

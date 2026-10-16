@@ -264,7 +264,7 @@ test "a run's budget covers every configured source" {
 test "a dataset of another source is refused" {
     client = make_client();
     with testraises(ValueError) {
-        client.get(Dataset(name="x", source="fred", max_age_hours=1), "/v1/items", budget());
+        client.get(Dataset(name="x", source="wikipedia", max_age_hours=1), "/v1/items", budget());
     }
 }
 
@@ -282,7 +282,7 @@ test "the token bucket allows a burst, then paces to the rate" {
 
 test "sources on one provider limit share a bucket" {
     assert bucket_for(SOURCES["sec_data"]) is bucket_for(SOURCES["sec_archives"]);
-    assert bucket_for(SOURCES["finnhub"]) is not bucket_for(SOURCES["fred"]);
+    assert bucket_for(SOURCES["finnhub"]) is not bucket_for(SOURCES["wikipedia"]);
 }
 
 test "stale data is excluded and named in the gaps" {
