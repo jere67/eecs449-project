@@ -629,6 +629,7 @@ The bootstrap is seeded from the ticker and run date, so the same votes always g
 | Anything else | NO ACTION (a held position stays unchanged) |
 
 Conviction is |C| × A.
+In code, a held position's exit condition triggers when its time stop has passed; price exits are the stop orders the Action layer places (Section 8), and an event exit is the Arbiter's text for the next run's research to test.
 The thresholds, the ambiguity band, and the 60% minimum share of valid samples live in `ConsensusConfig` (`analysis/consensus.jac`), versioned with `CONSENSUS_VERSION`, which each run records.
 The Action layer turns conviction into position size (Section 8).
 
