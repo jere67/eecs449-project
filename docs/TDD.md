@@ -579,6 +579,9 @@ Votes flow one way into code; only an ambiguous result loops back for more sampl
 Flow data has different delays: Form 4 arrives within [two business days](https://www.sec.gov/files/forms-3-4-5.pdf) of an insider trade, while 13F holdings are quarterly and filed up to [45 days after quarter end](https://www.sec.gov/rules-regulations/staff-guidance/division-investment-management-frequently-asked-questions/frequently-asked-questions-about-form-13f), so the Flow specialist treats institutional data as weeks to months old.
 EDGAR has no per-issuer 13F endpoint: holdings sit in each manager's own filing, so a per-stock view needs SEC's quarterly [13F data sets](https://www.sec.gov/data-research/sec-markets-data/form-13f-data-sets) joined to tickers, which is a stretch goal (#52); until then the Flow specialist reads Form 4 only.
 
+Each specialist reads a packet built in code from its primary reports (`agents/specialists.jac`): every report's summary, risks, and data gaps, and their evidence as one numbered list, but not the research sub-agents' own views or confidences, so the panel does not anchor on them.
+The Macro and Sector specialist reads the run's macro report and the ticker's market report, which carries its strength against its sector fund.
+
 A Critic role that writes the strongest opposing case for the Arbiter is a stretch goal (Section 16).
 
 ### Where the randomness comes from
@@ -593,7 +596,7 @@ A result counts as near a threshold when moving C and its interval, or A, by up 
 
 Each sample returns a typed `Vote`: a stance from STRONG\_SELL to STRONG\_BUY, a confidence from 0 to 1, a horizon in trading days, a rationale, and the indices of the evidence it relied on.
 The stance is a string enum that code maps to a score from −2 to +2 (Section 3).
-A vote that cites no evidence is discarded.
+A vote that cites no evidence fails the parse and is retried with feedback; code then maps the numbers a sample was shown back to the packet's own order, and a vote that still cites nothing in range is discarded.
 
 ### Aggregation
 

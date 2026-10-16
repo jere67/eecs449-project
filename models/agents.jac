@@ -121,6 +121,9 @@ obj Vote {
         if self.horizon_days < 1 {
             raise ValueError(f"horizon_days must be at least 1, got {self.horizon_days}");
         }
+        if not self.cited_evidence {
+            raise ValueError("cited_evidence must list at least one evidence number");
+        }
     }
 }
 
@@ -128,4 +131,4 @@ sem Vote.stance = "Your call on the stock over horizon_days.";
 sem Vote.confidence = "Probability in [0, 1] that the stance is right over horizon_days.";
 sem Vote.horizon_days = "How many trading days the call is meant to hold.";
 sem Vote.rationale = "Two to four sentences explaining the call from your specialty alone.";
-sem Vote.cited_evidence = "Indices of the evidence items this vote relies on; never empty.";
+sem Vote.cited_evidence = "Numbers of the evidence items this vote relies on, as shown in brackets; at least one.";
