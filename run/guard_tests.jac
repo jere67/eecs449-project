@@ -1,5 +1,5 @@
 """The Run Guard (run/guard.jac): preflight, the run claim, every tool's limits, the fixed-order
-fallback, and the graph a finished run writes, on the stubs in tests/fakes/run_stubs.jac, so
+fallback, and the graph a finished run writes, on the stubs in run/stubs.jac, so
 no test touches the network."""
 import uuid;
 import from analysis.consensus { ConsensusConfig }
@@ -21,7 +21,7 @@ import from models.graph {
     TradeAction
 }
 import from run.guard { RunLimits, RunOutcome, RunSession, claim_run, count_requests, daily_run, holdings_of, preflight, stored_requests }
-import from tests.fakes.run_stubs { RUN_DAY, Stubs, collection }
+import from run.stubs { RUN_DAY, Stubs, collection }
 
 def team -> Portfolio {
     found = Portfolio(name=f"test-{uuid.uuid4()}", mode=PortfolioMode.INSIGHT, starting_cash=0.0, opened_at="2026-10-01T00:00:00+00:00");

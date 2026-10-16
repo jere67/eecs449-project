@@ -3,7 +3,10 @@ the market calendar, OpenRouter's count, and every research brief are stubbed, M
 in for every role model, and the run's pool has one worker.
 
 Each scripted model answers every call the same way, so the order calls arrive in never
-matters, and every research brief cites one shared source."""
+matters, and every research brief cites one shared source.
+
+The stubs build run types, so they live beside the run modules: `jac build` seals `tests/fakes/`
+as a separate dependency, and a `Collection` built there is a different type to the checker."""
 import json;
 import from concurrent.futures { ThreadPoolExecutor }
 import from jaclang.byllm.lib { MockLLM, MockRawResponse }

@@ -1,7 +1,7 @@
 """The Orchestrator's loop over a run session (run/orchestration.jac, agents/orchestrator.jac),
 with MockLLM scripted to call the session's tools: a full run, a clamped follow-up, the budget
 hook, the iteration cap, and a failing model. Uses the whole-run stubs in
-tests/fakes/run_stubs.jac, so no test touches the network."""
+run/stubs.jac, so no test touches the network."""
 import uuid;
 import agents.orchestrator as orchestrator_module;
 import from jaclang.byllm.lib { MockError, MockLLM, MockToolCall }
@@ -9,7 +9,7 @@ import from analysis.consensus { ConsensusConfig }
 import from models.graph { Portfolio, PortfolioMode, RunStatus, TradeAction }
 import from run.guard { RunLimits, RunSession, daily_run }
 import from run.orchestration { orchestrate }
-import from tests.fakes.run_stubs { RUN_DAY, Stubs, collection }
+import from run.stubs { RUN_DAY, Stubs, collection }
 
 def session_with(stubs: Stubs, run_requests: int = 600, iterations: int = 12) -> RunSession {
     return RunSession(run_day=RUN_DAY, collection=collection(stubs.symbols, []), holdings={}, config=ConsensusConfig(), limits=RunLimits(react_iterations=iterations), run_requests=run_requests);
