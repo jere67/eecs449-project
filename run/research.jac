@@ -8,10 +8,11 @@ the caller's thread (TDD §3, rule 6). A failed source becomes a gap,
 and a failed sub-agent a safe default, so one bad ticker or provider never stops the pass.
 """
 import time;
-import from concurrent.futures { Future, ThreadPoolExecutor }
+import from concurrent.futures { Future }
 import from datetime { date, datetime, timedelta }
 import from agents.models { FALLBACK_MODEL, LIMITER, PRIMARY_MODEL }
 import from agents.research { MacroResult, ResearchResult, macro_research, research }
+import from models.agents { Domain }
 import from models.graph {
     Coverage,
     CoverageReason,
@@ -55,16 +56,9 @@ import from research.sec { cik_map, earnings_release, eight_ks, filings, fundame
 import from research.sources { DATASETS, Dataset, SOURCES_VERSION }
 import from research.wikipedia { Constituent, constituents }
 import from run.public { public }
+import from run.workers { NETWORK }
 
 glob BENCHMARK: str = "SPY";
-
-# Collectors and sub-agents wait on the network, not the CPU. `flow`'s pool has cpu + 4
-# threads, which held the first exit run to about 3.5 model requests a minute against the
-# limiter's 18 (docs/runs/2026-10-15-research-exit-run.md) and would hold a 2-vCPU server to
-# half that, so the pass has its own pool, sized to keep the limiter busy while slow
-# requests run. The limiter and each source's token bucket still set the pace.
-glob NETWORK_WORKERS: int = 32;
-glob NETWORK: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=NETWORK_WORKERS, thread_name_prefix="research");
 
 glob COVERAGE_REASONS: dict[PickReason, CoverageReason] = {
     PickReason.SCORE: CoverageReason.SCREEN,
@@ -156,13 +150,55 @@ obj ResearchPass {
     }
 }
 
+"""Everything a run collects before any model call: the shortlist, each ticker's inputs, the
+macro inputs, the trading sessions around the run date, and what was missing."""
+obj Collection {
+    has run_day: str,
+        started_at: str,
+        shortlist: Shortlist,
+        tickers: list[TickerInputs],
+        macro_inputs: MacroInputs,
+        sessions: list[str];
+    has gaps: list[str] = [],
+        phase_seconds: dict[str, float] = {},
+        source_calls: dict[str, int] = {};
+
+    def inputs_for(symbol: str) -> TickerInputs | None {
+        return next((t for t in self.tickers if t.pick.symbol == symbol), None);
+    }
+}
+
 """The research for a run trading on `run_day` (ISO date), covering the screen's shortlist
 and every symbol in `open_positions`. Never touches the graph; pass the result to
 `record_pass`."""
 def research_pass(run_day: str, open_positions: list[str], config: PassConfig = PassConfig()) -> ResearchPass {
+    (requests_before, fallbacks_before) = (LIMITER.sent, LIMITER.fallbacks);
+    found = collect_pass(run_day, open_positions, config);
+    phases = dict(found.phase_seconds);
+    clock = time.monotonic();
+    (per_ticker, macro) = write_reports(run_day, found.tickers, found.macro_inputs);
+    phases["research"] = time.monotonic() - clock;
+    return ResearchPass(
+        run_day=run_day,
+        started_at=found.started_at,
+        finished_at=utc_now().isoformat(),
+        shortlist=found.shortlist,
+        tickers=per_ticker,
+        macro=macro,
+        regime=regime_inputs(found.macro_inputs),
+        gaps=found.gaps,
+        phase_seconds=phases,
+        model_requests=LIMITER.sent - requests_before,
+        fallbacks=LIMITER.fallbacks - fallbacks_before,
+        source_calls=found.source_calls
+    );
+}
+
+"""Screen the S&P 500 and collect every shortlisted ticker's data and the macro inputs, with
+no model calls. Never touches the graph."""
+def collect_pass(run_day: str, open_positions: list[str], config: PassConfig = PassConfig()) -> Collection {
     now = utc_now();
     phases: dict[str, float] = {};
-    (requests_before, fallbacks_before) = (LIMITER.sent, LIMITER.fallbacks);
     budget = run_budget();
     gaps: list[str] = [];
 
@@ -201,29 +237,32 @@ def research_pass(run_day: str, open_positions: list[str], config: PassConfig = 
     collected = [f.result() for f in pending];
     phases["collect"] = time.monotonic() - clock;
 
-    clock = time.monotonic();
     macro_inputs = MacroInputs(
         spy=technicals.get(BENCHMARK),
         bonds={etf: technicals[etf] for etf in BOND_ETFS if etf in technicals},
         sectors={etf: technicals[etf] for etf in SECTOR_ETFS.values() if etf in technicals}
     );
-    (per_ticker, macro) = write_reports(run_day, collected, macro_inputs);
-    phases["research"] = time.monotonic() - clock;
-
-    return ResearchPass(
+    return Collection(
         run_day=run_day,
         started_at=now.isoformat(),
-        finished_at=utc_now().isoformat(),
         shortlist=shortlist,
-        tickers=per_ticker,
-        macro=macro,
-        regime=regime_inputs(macro_inputs),
+        tickers=collected,
+        macro_inputs=macro_inputs,
+        sessions=sessions,
         gaps=gaps,
         phase_seconds=phases,
-        model_requests=LIMITER.sent - requests_before,
-        fallbacks=LIMITER.fallbacks - fallbacks_before,
         source_calls=dict(budget.spent)
     );
+}
+
+"""The three per-ticker briefs for one ticker's collected inputs, by domain."""
+def briefs_for(run_day: str, inputs: TickerInputs) -> dict[Domain, Brief] {
+    symbol = inputs.pick.symbol;
+    return {
+        Domain.MARKET: market_brief(symbol, run_day, inputs.market),
+        Domain.FUNDAMENTALS: fundamentals_brief(symbol, run_day, inputs.fundamentals),
+        Domain.NEWS: news_brief(symbol, run_day, inputs.news)
+    };
 }
 
 """Run the three research sub-agents on every collected ticker and the Macro sub-agent
@@ -232,12 +271,7 @@ def write_reports(run_day: str, collected: list[TickerInputs], macro_inputs: Mac
     pending_macro = NETWORK.submit(macro_research, macro_brief(run_day, macro_inputs));
     running: list[list[Future[ResearchResult]]] = [];
     for c in collected {
-        briefs = [
-            market_brief(c.pick.symbol, run_day, c.market),
-            fundamentals_brief(c.pick.symbol, run_day, c.fundamentals),
-            news_brief(c.pick.symbol, run_day, c.news)
-        ];
-        running.append([NETWORK.submit(research, b) for b in briefs]);
+        running.append([NETWORK.submit(research, b) for b in briefs_for(run_day, c).values()]);
     }
     per_ticker = [
         TickerResearch(pick=c.pick, reports=[f.result() for f in futures], fetch_errors=c.fetch_errors)
