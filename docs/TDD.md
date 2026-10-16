@@ -587,6 +587,7 @@ A Critic role that writes the strongest opposing case for the Arbiter is a stret
 2. **Evidence permutation.** Each sample receives the report's evidence items in a different random order, reducing position bias.
 
 K starts at 3. If the result sits near a decision threshold, the engine draws 2 more samples per specialist (sequential sampling), so model requests scale with ambiguity.
+A result counts as near a threshold when moving C and its interval, or A, by up to 0.05 would change the draft action; the band is proposed until it is tuned with the thresholds (GAP-04).
 
 ### Vote format
 
@@ -613,6 +614,7 @@ Weights are equal in the core build.
 A 1,000-draw bootstrap gives a 90% interval for C by resampling whole specialists, each with all of its samples, rather than individual samples.
 A specialist's K samples share one prompt and one evidence set, so resampling them as if independent would make the interval too narrow.
 Weights based on each specialist's track record are a stretch goal.
+The bootstrap is seeded from the ticker and run date, so the same votes always give the same interval.
 
 ### Decision rule
 
@@ -624,6 +626,7 @@ Weights based on each specialist's track record are a stretch goal.
 | Anything else | NO ACTION (a held position stays unchanged) |
 
 Conviction is |C| × A.
+The thresholds, the ambiguity band, and the 60% minimum share of valid samples live in `ConsensusConfig` (`analysis/consensus.jac`), versioned with `CONSENSUS_VERSION`, which each run records.
 The Action layer turns conviction into position size (Section 8).
 
 ### Arbiter
