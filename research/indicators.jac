@@ -35,6 +35,19 @@ glob SECTOR_ETFS: dict[str, str] = {
     "Utilities": "XLU"
 };
 
+# Treasury funds for the Macro sub-agent's view of rates and inflation, short to long
+# maturity, then inflation-protected.
+glob BOND_ETFS: dict[str, str] = {
+    "SHY": "1-3 year Treasury fund",
+    "IEF": "7-10 year Treasury fund",
+    "TLT": "20+ year Treasury fund",
+    "TIP": "inflation-protected Treasury fund"
+};
+
+# The fund a Treasury fund is measured against: TIP against IEF, of similar maturity, so the
+# gap between them tracks inflation expectations rather than rates.
+glob BOND_BENCHMARKS: dict[str, str] = {"TIP": "IEF"};
+
 """The indicator summary for one symbol on its newest bar. Returns are fractions (0.05 is
 5%), and `rs_*` is the return relative to a benchmark: (1 + stock) / (1 + benchmark) - 1."""
 obj Technicals(Stamped) {

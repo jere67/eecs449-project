@@ -8,12 +8,15 @@ import from research.briefs {
     FundamentalsInputs,
     MAX_ARTICLES,
     MAX_BRIEF_CHARS,
+    MacroInputs,
     MarketInputs,
     NewsInputs,
     change,
     fundamentals_brief,
+    macro_brief,
     market_brief,
     news_brief,
+    regime_inputs,
     pct,
     pick_articles,
     usd
@@ -208,4 +211,51 @@ test "the length cap keeps the first sources, and only those can be cited" {
 test "numbers read at a sensible scale" {
     assert [usd(1.234e12), usd(-5.6e9), usd(12_340_000.0), usd(331.44), usd(None)] == ["$1.2T", "-$5.6B", "$12.3M", "$331.44", "n/a"];
     assert [pct(0.1234), pct(0.5, 0), change(0.042), change(-0.011), change(None)] == ["12.3%", "50%", "+4.2%", "-1.1%", "n/a"];
+}
+
+def macro_inputs -> MacroInputs {
+    spy = technicals("SPY");
+    spy.realized_vol_20 = 0.142;
+    tlt = technicals("TLT");
+    (tlt.momentum_20, tlt.momentum_60) = (-0.031, -0.054);
+    tip = technicals("TIP");
+    (tip.rs_sector_20, tip.rs_sector_60) = (0.004, 0.012);
+    xlk = technicals("XLK");
+    xlk.rs_spy_60 = 0.05;
+    xle = technicals("XLE");
+    xle.rs_spy_60 = -0.03;
+    return MacroInputs(spy=spy, bonds={"TIP": tip, "TLT": tlt}, sectors={"XLE": xle, "XLK": xlk});
+}
+
+test "the macro brief puts market risk first, then Treasury funds, then sector rotation" {
+    brief = macro_brief(AS_OF, macro_inputs());
+    assert brief.domain == Domain.MACRO;
+    texts = {i.label: i.text for i in brief.kept()};
+    assert list(texts) == [
+        "SPY (S&P 500 fund) trend",
+        "TLT (20+ year Treasury fund)",
+        "TIP (inflation-protected Treasury fund)",
+        "XLK (Information Technology sector fund)",
+        "XLE (Energy sector fund)"
+    ];
+    spy = texts["SPY (S&P 500 fund) trend"];
+    assert spy.startswith("Close on 2026-10-14: $110.00, above its 200-day average $100.00.");
+    assert "Realized volatility (20-day, annualized): 14.2%." in spy;
+    tlt = texts["TLT (20+ year Treasury fund)"];
+    assert "Return: 20-day -3.1%, 60-day -5.4% (a falling fund means its yields rose)." in tlt;
+    assert "Relative strength" not in tlt;
+    assert "Relative strength against IEF, of similar maturity: 20-day +0.4%, 60-day +1.2%" in texts["TIP (inflation-protected Treasury fund)"];
+    assert texts["XLK (Information Technology sector fund)"].startswith("Ranks 1 of 2 sector funds by 60-day strength against SPY.");
+    assert texts["XLE (Energy sector fund)"].startswith("Ranks 2 of 2");
+    assert "macro: no bars for Treasury funds SHY, IEF" in brief.gaps;
+    assert [g for g in brief.gaps if g.startswith("macro: no bars for sector funds")][0].startswith("macro: no bars for sector funds XLB, XLC, XLF");
+}
+
+test "the regime inputs come from SPY's bars, not from the model" {
+    found = regime_inputs(macro_inputs());
+    assert (found.spy_close, found.spy_sma_200, found.spy_vol_20, found.spy_as_of) == (110.0, 100.0, 0.142, "2026-10-14");
+    assert found.spy_above_200d() is True;
+    empty = regime_inputs(MacroInputs());
+    assert empty.spy_above_200d() is None and empty.spy_vol_20 is None;
+    assert "macro: no SPY bars, so no market trend or regime check" in macro_brief(AS_OF, MacroInputs()).gaps;
 }

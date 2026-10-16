@@ -10,8 +10,9 @@ without a network, and the agent layer checks every citation against `Brief.publ
 """
 import from models.agents { Domain }
 import from research.alpaca_news { Article }
+import from models.research { RegimeInputs }
 import from research.finnhub { EarningsDate, EpsSurprise, KeyMetrics, RecommendationTrend }
-import from research.indicators { Technicals }
+import from research.indicators { BOND_BENCHMARKS, BOND_ETFS, SECTOR_ETFS, Technicals }
 import from research.sec { EarningsRelease, Filing, Fundamentals, InsiderTrade, ReportedValue, TRANSACTION_CODES }
 import from research.text { cap, untrusted_block }
 
@@ -430,6 +431,77 @@ def earnings_date_text(e: EarningsDate, sessions_until: int | None) -> str {
         parts.append(f"Consensus revenue estimate: {usd(e.revenue_estimate)}.");
     }
     return " ".join(parts);
+}
+
+"""What the collectors found for the Macro sub-agent: SPY, then each Treasury fund and each
+sector fund by ticker. Sector funds carry relative strength against SPY, and a Treasury fund
+in BOND_BENCHMARKS carries it against its benchmark fund in `rs_sector_*`."""
+obj MacroInputs {
+    has spy: Technicals | None = None,
+        bonds: dict[str, Technicals] = {},
+        sectors: dict[str, Technicals] = {},
+        gaps: list[str] = [];
+}
+
+"""The regime figures the risk gate reads, computed in code."""
+def regime_inputs(inputs: MacroInputs) -> RegimeInputs {
+    spy = inputs.spy;
+    return RegimeInputs(
+        spy_close=spy.close if spy else None,
+        spy_sma_200=spy.sma_200 if spy else None,
+        spy_vol_20=spy.realized_vol_20 if spy else None,
+        spy_as_of=spy.as_of if spy else ""
+    );
+}
+
+"""The Macro sub-agent's brief: once per run, shared by every ticker. Market-wide risk comes
+first, then rates and inflation expectations from Treasury funds, then sector rotation."""
+def macro_brief(as_of: str, inputs: MacroInputs) -> Brief {
+    brief = Brief(ticker="MARKET", domain=Domain.MACRO, as_of=as_of, gaps=list(inputs.gaps));
+    if inputs.spy is None {
+        brief.gaps.append("macro: no SPY bars, so no market trend or regime check");
+    } else {
+        brief.add("SPY (S&P 500 fund) trend", inputs.spy.stamp.source_url, inputs.spy.stamp.published_at, benchmark_text(inputs.spy));
+    }
+    for (etf, name) in BOND_ETFS.items() {
+        if etf in inputs.bonds {
+            t = inputs.bonds[etf];
+            brief.add(f"{etf} ({name})", t.stamp.source_url, t.stamp.published_at, bond_text(t));
+        }
+    }
+    missing_bonds = [etf for etf in BOND_ETFS if etf not in inputs.bonds];
+    if missing_bonds {
+        brief.gaps.append(f"macro: no bars for Treasury funds {', '.join(missing_bonds)}");
+    }
+    ranked = sorted(inputs.sectors.items(), key=lambda (kv: tuple[str, Technicals]) { kv[1].rs_spy_60 if kv[1].rs_spy_60 is not None else -9.0; }, reverse=True);
+    sectors = {etf: name for (name, etf) in SECTOR_ETFS.items()};
+    for (rank, (etf, t)) in enumerate(ranked) {
+        brief.add(
+            f"{etf} ({sectors.get(etf, 'sector')} sector fund)",
+            t.stamp.source_url,
+            t.stamp.published_at,
+            f"Ranks {rank + 1} of {len(ranked)} sector funds by 60-day strength against SPY.\nRelative strength against SPY: 20-day {change(t.rs_spy_20)}, 60-day {change(t.rs_spy_60)}.\nMomentum: 20-day {change(t.momentum_20)}, 60-day {change(t.momentum_60)}."
+        );
+    }
+    missing = sorted(set(SECTOR_ETFS.values()) - set(inputs.sectors));
+    if missing {
+        brief.gaps.append(f"macro: no bars for sector funds {', '.join(missing)}");
+    }
+    return brief;
+}
+
+"""A Treasury fund's trend in words. Bond prices move against yields, so the text says which
+way the fund's returns point for rates; the returns include reinvested interest."""
+def bond_text(t: Technicals) -> str {
+    lines = [
+        f"Close on {t.as_of}: {usd(t.close)}.",
+        f"Return: 20-day {change(t.momentum_20)}, 60-day {change(t.momentum_60)} (a falling fund means its yields rose).",
+        f"Realized volatility (20-day, annualized): {pct(t.realized_vol_20)}."
+    ];
+    if t.symbol in BOND_BENCHMARKS {
+        lines.append(f"Relative strength against {BOND_BENCHMARKS[t.symbol]}, of similar maturity: 20-day {change(t.rs_sector_20)}, 60-day {change(t.rs_sector_60)} (inflation-protected Treasuries beating ordinary ones point to rising inflation expectations).");
+    }
+    return "\n".join(lines);
 }
 
 """Dollars at a readable scale: $109.4B, $12.3M, $331.44."""
