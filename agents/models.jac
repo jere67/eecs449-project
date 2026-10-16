@@ -12,6 +12,7 @@ import threading;
 import time;
 import from datetime { datetime, timezone }
 import from importlib { import_module }
+import httpx;
 import from jaclang.byllm.lib { AuthenticationError, ConfigurationError, Model, RateLimitError }
 
 # Chosen by spike #12 (docs/spikes/2026-10-08-free-models.md): the only free model with every
@@ -24,6 +25,11 @@ glob REQUESTS_PER_MINUTE: int = 18;
 # Spike #12's slowest successful request took 153 s; LiteLLM's default would wait 600 s.
 glob REQUEST_TIMEOUT_S: float = 180.0;
 glob KILL_SWITCH_ENV: str = "TRADING_AGENT_DISABLE_MODELS";
+# The account's free-model allowance per UTC day, after its one-time $10 credit purchase
+# (TDD §12).
+glob FREE_REQUESTS_PER_DAY: int = 1000;
+glob OPENROUTER_API_BASE: str = "https://openrouter.ai/api/v1";
+glob OPENROUTER_API_BASE_ENV: str = "OPENROUTER_API_BASE";
 
 # OpenRouter answers with the model name minus its "openrouter/" prefix, so LiteLLM's cost
 # lookup after every response fails to find a provider and prints a "Provider List" banner
@@ -79,6 +85,27 @@ obj RequestLimiter {
 }
 
 glob LIMITER: RequestLimiter = RequestLimiter(per_minute=REQUESTS_PER_MINUTE);
+
+"""Free-model requests OpenRouter reports left for the UTC day, from GET /key, or None when
+there is no key or no readable answer. The research exit run saw OpenRouter's `used` lag the
+real count, so the Run Guard takes the lower of this and its own count (TDD §12). This is not
+a model request and does not pass the limiter."""
+def provider_requests_left -> int | None {
+    key = os.environ.get("OPENROUTER_API_KEY", "");
+    if not key {
+        return None;
+    }
+    base = os.environ.get(OPENROUTER_API_BASE_ENV, OPENROUTER_API_BASE).rstrip("/");
+    try {
+        response = httpx.get(f"{base}/key", headers={"Authorization": f"Bearer {key}"}, timeout=30);
+        response.raise_for_status();
+        usage = (response.json().get("data") or {}).get("free_model_daily_requests") or {};
+        left = usage.get("remaining");
+        return int(left) if left is not None else None;
+    } except Exception {
+        return None;
+    }
+}
 
 """A byLLM model whose every provider request passes the limiter, backs off on 429, times
 out, and falls back to a second free model when the primary model stays rate limited, is
