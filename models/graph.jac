@@ -159,7 +159,9 @@ node Decision {
         exit_condition: str = "",
         time_stop: str = "",
         downgrade_reason: str = "",
-        forced_hold_reason: str = "";
+        forced_hold_reason: str = "",
+        arbiter_verdict: str = "",
+        model: str = "";
 }
 
 obj RuleResult {
