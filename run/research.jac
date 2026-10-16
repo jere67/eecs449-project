@@ -8,7 +8,7 @@ the caller's thread (TDD §3, rule 6). A failed source becomes a gap,
 and a failed sub-agent a safe default, so one bad ticker or provider never stops the pass.
 """
 import time;
-import from concurrent.futures { Future, ThreadPoolExecutor }
+import from concurrent.futures { Future }
 import from datetime { date, datetime, timedelta }
 import from agents.models { FALLBACK_MODEL, LIMITER, PRIMARY_MODEL }
 import from agents.research { MacroResult, ResearchResult, macro_research, research }
@@ -55,16 +55,9 @@ import from research.sec { cik_map, earnings_release, eight_ks, filings, fundame
 import from research.sources { DATASETS, Dataset, SOURCES_VERSION }
 import from research.wikipedia { Constituent, constituents }
 import from run.public { public }
+import from run.workers { NETWORK }
 
 glob BENCHMARK: str = "SPY";
-
-# Collectors and sub-agents wait on the network, not the CPU. `flow`'s pool has cpu + 4
-# threads, which held the first exit run to about 3.5 model requests a minute against the
-# limiter's 18 (docs/runs/2026-10-15-research-exit-run.md) and would hold a 2-vCPU server to
-# half that, so the pass has its own pool, sized to keep the limiter busy while slow
-# requests run. The limiter and each source's token bucket still set the pace.
-glob NETWORK_WORKERS: int = 32;
-glob NETWORK: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=NETWORK_WORKERS, thread_name_prefix="research");
 
 glob COVERAGE_REASONS: dict[PickReason, CoverageReason] = {
     PickReason.SCORE: CoverageReason.SCREEN,
