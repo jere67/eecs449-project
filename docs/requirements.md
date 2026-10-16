@@ -97,7 +97,7 @@ The following user needs are the basis for the functional requirements and user 
 | Market | Daily price/volume history, recent trading activity, and benchmark/sector comparisons. |
 | Fundamentals and filings | Company facts, financial statements/filings, guidance, earnings information, insider transactions, and institutional holdings (13F holdings are a stretch goal, #52). |
 | News and events | Recent company news, filings, scheduled events, earnings dates, and relevant catalysts. |
-| Macro | Rates, inflation, growth, volatility regime, and sector-rotation information. |
+| Macro | Market trend and volatility regime, rates and inflation expectations, and sector-rotation information. |
 
 **Acceptance criteria**
 
@@ -227,7 +227,7 @@ The following user needs are the basis for the functional requirements and user 
 | New positions | No more than 3 new positions per day; retain the highest-conviction three if more qualify. |
 | Daily turnover | No more than 25% of portfolio value; scale down as required, with exits prioritized. |
 | Drawdown breaker | When portfolio drawdown reaches 10% from peak, halt new buys; exits and protective stops remain active. |
-| Market-regime cap | When SPY is below its 200-day average and VIX is above 30, cap gross exposure at 50%. |
+| Market-regime cap | When SPY is below its 200-day average and its 20-day realized volatility, annualized, is above 30%, cap gross exposure at 50%. |
 | Earnings blackout | Reject new entries within 2 trading days before earnings and publish them as insight-only opportunities. |
 | Liquidity | Any order shall be no larger than 1% of 20-day average daily volume. |
 | Instrument eligibility | Reject instruments that are inactive, non-tradable, halted, or priced at $5 or less. |
@@ -547,7 +547,6 @@ These are evaluation targets, not guarantees of financial profitability.
 
 - The system shall use only data sources whose free/public terms permit the educational, non-commercial use intended by the project.
 - SEC requests shall remain below 10 requests per second and include the required declared User-Agent contact information.
-- Public pages shall show required FRED attribution wherever FRED-derived values are presented.
 - The product shall not redistribute prohibited raw third-party data.
 - Every page and every insight card shall identify the product as an educational student project using simulated money and not investment advice.
 
@@ -596,7 +595,6 @@ The core design currently identifies these sources:
 - Alpaca market data and news/trading-calendar services.
 - SEC EDGAR.
 - Finnhub free tier.
-- FRED.
 - S&P 500 constituent data from the identified public source(s).
 
 The system shall comply with the limits and terms of the selected free tiers.
